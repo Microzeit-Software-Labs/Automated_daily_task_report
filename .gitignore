@@ -1,0 +1,29 @@
+# Secrets — never commit
+.env
+.env.local
+*.pem
+*.key
+credentials*.json
+service-account*.json
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Local agent state (Phase 3)
+apps/agent/.wa-session/
+apps/agent/node_modules/
+apps/agent/*.sqlite
+
+# OS
+Thumbs.db
+desktop.ini

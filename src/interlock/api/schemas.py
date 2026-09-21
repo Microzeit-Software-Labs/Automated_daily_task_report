@@ -1,0 +1,353 @@
+"""Request/response models.
+
+``TaskEditFields`` is the one worth reading carefully: every field is typed as
+the real domain type (``Priority``, ``TaskStatus``, a real ``date``), not a
+bare string. That makes Pydantic itself responsible for coercing
+``"COMPLETED"`` into ``TaskStatus.COMPLETED`` at the API boundary --
+``model_dump(exclude_unset=True)`` then hands the router a dict of real domain
+values, not raw JSON strings a client happened to type. Skipping this and
+passing raw strings through to ``apply_edit`` is exactly the bug this project
+hit twice already, in its own test fixtures.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from interlock.domain.approvals.request import ApprovalKind, ApprovalRequest
+from interlock.domain.approvals.states import ApprovalState, RecipientState, ShareJobState
+from interlock.domain.sharing.group import WhatsAppGroup
+from interlock.domain.sharing.job import ShareJob, ShareRecipient
+from interlock.domain.tasks.entities import Priority, Task, TaskSourceKind, TaskStatus
+from interlock.domain.tasks.summary import ChangeSummary, TaskSummary
+from interlock.services.review_service import ReviewDetail
+from interlock.services.sharing_service import CommitMode, CommitResult
+
+
+class TaskCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=300)
+    description: str = ""
+    project_id: str | None = None
+    owner_id: str | None = None
+    priority: Priority = Priority.MEDIUM
+    status: TaskStatus = TaskStatus.PENDING
+    due_date: dt.date | None = None
+    remarks: str = ""
+    tags: tuple[str, ...] = ()
+
+
+class TaskEditFields(BaseModel):
+    """Every field PATCH /tasks/{id} may change. All optional -- only fields
+    actually present in the request body are applied, via
+    ``model_dump(exclude_unset=True)``, so "not sent" and "explicitly set to
+    its current value" are properly distinguishable from "clear this field"."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    description: str | None = None
+    project_id: str | None = None
+    owner_id: str | None = None
+    priority: Priority | None = None
+    status: TaskStatus | None = None
+    due_date: dt.date | None = None
+    remarks: str | None = None
+    tags: tuple[str, ...] | None = None
+
+
+class TaskOut(BaseModel):
+    id: str
+    display_id: str
+    title: str
+    description: str
+    project_id: str | None
+    owner_id: str | None
+    priority: Priority
+    status: TaskStatus
+    created_at: dt.datetime
+    updated_at: dt.datetime
+    due_date: dt.date | None
+    completed_at: dt.datetime | None
+    remarks: str
+    tags: tuple[str, ...]
+    source: TaskSourceKind
+    version: int
+    last_shared_at: dt.datetime | None
+
+    @classmethod
+    def from_entity(cls, task: Task) -> TaskOut:
+        return cls(
+            id=task.id,
+            display_id=task.display_id,
+            title=task.title,
+            description=task.description,
+            project_id=task.project_id,
+            owner_id=task.owner_id,
+            priority=task.priority,
+            status=task.status,
+            created_at=task.created_at,
+            updated_at=task.updated_at,
+            due_date=task.due_date,
+            completed_at=task.completed_at,
+            remarks=task.remarks,
+            tags=task.tags,
+            source=task.source,
+            version=task.version,
+            last_shared_at=task.last_shared_at,
+        )
+
+
+class BulkUpdateItemRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    changes: TaskEditFields
+    expected_version: int = Field(ge=1)
+
+
+class BulkUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[BulkUpdateItemRequest]
+
+
+class BulkUpdateItemResult(BaseModel):
+    task_id: str
+    ok: bool
+    task: TaskOut | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+class BulkUpdateResponse(BaseModel):
+    results: list[BulkUpdateItemResult]
+
+
+class CommitTaskUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    changes: TaskEditFields
+    expected_version: int = Field(ge=1)
+
+
+class CommitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: CommitMode
+    action_version: int = Field(ge=1)
+    task_updates: list[CommitTaskUpdate] = Field(default_factory=list)
+    recipient_group_ids: list[str] = Field(default_factory=list)
+    send_at: dt.datetime | None = None
+    template_id: str | None = None
+    template_source: str | None = None
+
+
+class ShareRecipientOut(BaseModel):
+    id: str
+    whatsapp_group_id: str
+    state: RecipientState
+    attempts: int
+    client_message_id: str
+    error_code: str | None
+    error_detail: str
+
+    @classmethod
+    def from_entity(cls, recipient: ShareRecipient) -> ShareRecipientOut:
+        return cls(
+            id=recipient.id,
+            whatsapp_group_id=recipient.whatsapp_group_id,
+            state=recipient.state,
+            attempts=recipient.attempts,
+            client_message_id=recipient.client_message_id,
+            error_code=recipient.error_code,
+            error_detail=recipient.error_detail,
+        )
+
+
+class ShareJobOut(BaseModel):
+    id: str
+    display_id: str
+    state: ShareJobState
+    action_version: int
+    deferred_reason: str | None
+    sent_at: dt.datetime | None
+
+    @classmethod
+    def from_entity(cls, job: ShareJob) -> ShareJobOut:
+        return cls(
+            id=job.id,
+            display_id=job.display_id,
+            state=job.state,
+            action_version=job.action_version,
+            deferred_reason=job.deferred_reason.value if job.deferred_reason else None,
+            sent_at=job.sent_at,
+        )
+
+
+class CommitResponse(BaseModel):
+    request_id: str
+    mode: CommitMode
+    job: ShareJobOut | None
+    recipients: list[ShareRecipientOut]
+    preview: str | None
+    already_committed: bool
+
+    @classmethod
+    def from_result(cls, result: CommitResult) -> CommitResponse:
+        return cls(
+            request_id=result.request_id,
+            mode=result.mode,
+            job=ShareJobOut.from_entity(result.job) if result.job else None,
+            recipients=[ShareRecipientOut.from_entity(r) for r in result.recipients],
+            preview=result.preview,
+            already_committed=result.already_committed,
+        )
+
+
+class PreviewResponse(BaseModel):
+    rendered_body: str
+
+
+class ApprovalRequestOut(BaseModel):
+    id: str
+    display_id: str
+    kind: ApprovalKind
+    local_date: dt.date
+    scheduled_for: dt.datetime
+    state: ApprovalState
+    opened_at: dt.datetime | None
+    approved_by_user_id: str | None
+    approved_at: dt.datetime | None
+
+    @classmethod
+    def from_entity(cls, request: ApprovalRequest) -> ApprovalRequestOut:
+        return cls(
+            id=request.id,
+            display_id=request.display_id,
+            kind=request.kind,
+            local_date=request.local_date,
+            scheduled_for=request.scheduled_for,
+            state=request.state,
+            opened_at=request.opened_at,
+            approved_by_user_id=request.approved_by_user_id,
+            approved_at=request.approved_at,
+        )
+
+
+class TaskSummaryOut(BaseModel):
+    completed: int
+    pending: int
+    in_progress: int
+    blocked: int
+    deferred: int
+    overdue: int
+    due_today: int
+    newly_added: int
+    modified_today: int
+    total: int
+    remaining: int
+
+    @classmethod
+    def from_entity(cls, summary: TaskSummary) -> TaskSummaryOut:
+        return cls(**summary.as_dict())
+
+
+class ChangeSummaryOut(BaseModel):
+    added: int
+    completed: int
+    modified: int
+    overdue: int
+    still_pending: int
+
+    @classmethod
+    def from_entity(cls, changes: ChangeSummary) -> ChangeSummaryOut:
+        return cls(**changes.as_dict())
+
+
+class ReviewDetailOut(BaseModel):
+    request: ApprovalRequestOut
+    tasks: list[TaskOut]
+    summary: TaskSummaryOut
+    changes_since_last_share: ChangeSummaryOut
+
+    @classmethod
+    def from_detail(cls, detail: ReviewDetail) -> ReviewDetailOut:
+        return cls(
+            request=ApprovalRequestOut.from_entity(detail.request),
+            tasks=[TaskOut.from_entity(t) for t in detail.tasks],
+            summary=TaskSummaryOut.from_entity(detail.summary),
+            changes_since_last_share=ChangeSummaryOut.from_entity(detail.changes_since_last_share),
+        )
+
+
+class WhatsAppGroupCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str = Field(min_length=1, max_length=200)
+    external_jid: str = Field(min_length=1, max_length=100)
+    description: str = ""
+    default_morning: bool = False
+    default_evening: bool = False
+
+
+class WhatsAppGroupOut(BaseModel):
+    id: str
+    display_name: str
+    external_jid: str
+    enabled: bool
+    description: str
+    default_morning: bool
+    default_evening: bool
+    last_used_at: dt.datetime | None
+
+    @classmethod
+    def from_entity(cls, group: WhatsAppGroup) -> WhatsAppGroupOut:
+        return cls(
+            id=group.id,
+            display_name=group.display_name,
+            external_jid=group.external_jid,
+            enabled=group.enabled,
+            description=group.description,
+            default_morning=group.default_morning,
+            default_evening=group.default_evening,
+            last_used_at=group.last_used_at,
+        )
+
+
+class WhatsAppStatusOut(BaseModel):
+    provider: str
+    state: str
+    checked_at: dt.datetime
+    last_successful_send_at: dt.datetime | None
+    can_send: bool
+    detail: str
+
+
+class GroupCandidateOut(BaseModel):
+    external_jid: str
+    display_name: str
+    member_count: int | None
+    confidence: float
+
+
+class ResolveGroupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+
+
+class ErrorDetail(BaseModel):
+    code: str
+    message: str
+    details: dict[str, Any] = {}
+    retryable: bool = False
+
+
+class ErrorEnvelope(BaseModel):
+    error: ErrorDetail

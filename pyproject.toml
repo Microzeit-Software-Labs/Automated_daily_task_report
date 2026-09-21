@@ -1,0 +1,129 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "interlock"
+version = "0.1.0"
+description = "Task management, approval, scheduling and WhatsApp reporting platform"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy>=2.0.36",
+    "psycopg[binary]>=3.2",
+    "alembic>=1.14",
+    "python-ulid>=3.0",
+    "jinja2>=3.1",
+    "structlog>=24.4",
+    "google-api-python-client>=2.100",
+    "google-auth>=2.23",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "httpx>=0.28",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[project.scripts]
+interlock-worker = "interlock.workers.loop:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/interlock"]
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q --strict-markers"
+markers = [
+    "unit: pure domain tests, no database, no network",
+    "integration: requires a live PostgreSQL",
+    "acceptance: end-to-end scenario from the product brief",
+]
+
+[tool.coverage.run]
+source = ["src/interlock"]
+branch = true
+
+[tool.coverage.report]
+# Protocol classes are interface declarations whose bodies are literally `...`.
+# Counting them as uncovered statements measures nothing and hides the real
+# number for the code that does have logic.
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "class .*\\(Protocol\\):",
+    "@(typing\\.)?overload",
+    "raise NotImplementedError",
+]
+
+# ---------------------------------------------------------------------------
+# Lint
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "DTZ", "RET", "SIM", "TC", "PTH", "RUF"]
+ignore = [
+    "A003",
+    # TC001-TC003 want type-only imports moved under `if TYPE_CHECKING:`.
+    # That is actively unsafe here: dataclasses, Pydantic models and SQLAlchemy
+    # mapped classes all resolve annotations at runtime via get_type_hints(),
+    # which fails when the name only exists during type checking.
+    "TC001",
+    "TC002",
+    "TC003",
+]
+
+# DTZ is deliberately enabled everywhere, tests included: it bans naive datetime
+# construction, which is a hard requirement of this system. The handful of tests
+# that construct a naive datetime on purpose -- to prove it is rejected -- carry
+# an explicit `# noqa: DTZ001`, which documents the intent at the call site.
+
+[tool.ruff.lint.flake8-bugbear]
+# B008 ("function call in default argument") exists to catch the classic
+# mutable-default-argument footgun -- it is not meant to flag FastAPI's own
+# dependency-injection idiom, where `Depends(...)` in a signature default is
+# the documented, correct way to declare a dependency. This is the standard
+# ruff configuration FastAPI's own docs recommend for exactly this reason.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "fastapi.Path", "fastapi.Body"]
+
+[tool.ruff.lint.per-file-ignores]
+# Alembic's own autogenerate template, not hand-styled code. Re-running
+# `alembic revision --autogenerate` regenerates this same style regardless of
+# what lint rules say, so holding it to the repo's style rules would just be
+# refought on every future migration.
+"migrations/versions/*.py" = ["E501", "I001", "UP007", "UP035"]
+
+# ---------------------------------------------------------------------------
+# Types
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+packages = ["interlock"]
+mypy_path = "src"
+strict = true
+warn_unreachable = true
+
+# `disallow_any_explicit` is deliberately NOT enabled. Snapshot payloads, audit
+# entries and template contexts are genuinely heterogeneous JSON-shaped data;
+# forcing them into a union produces worse types, not safer ones.
+
+# google-api-python-client and google-auth's transport glue ship no inline
+# types and no stub package we pull in -- same untyped-dependency treatment
+# as any other library here, scoped to just these modules rather than a
+# blanket ignore_missing_imports.
+[[tool.mypy.overrides]]
+module = ["googleapiclient.*", "google_auth_httplib2.*"]
+ignore_missing_imports = true
