@@ -58,8 +58,10 @@ class GoogleSheetsProvider:
         if not values:
             return []
 
-        # Looked up by header name, not position, so a human reordering
-        # columns in the sheet does not break parsing.
+        # Reads are by header name, but writes (_row_values) are positional
+        # from column A -- so this tolerates a reordered sheet on read only.
+        # The layout must still match columns.HEADER_ROW for writes to land
+        # in the right cells.
         column_index = {name: index for index, name in enumerate(values[0])}
 
         rows: list[SheetRow] = []

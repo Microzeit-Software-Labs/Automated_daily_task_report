@@ -20,16 +20,19 @@ from interlock.adapters.persistence.models import UserRow
 from interlock.adapters.persistence.scheduler_repository import SchedulerRepository
 from interlock.adapters.persistence.sequences import PostgresSequences
 from interlock.adapters.persistence.share_repository import ShareRepository
+from interlock.adapters.persistence.sync_repository import SyncRepository
 from interlock.adapters.persistence.task_repository import PostgresTaskRepository
 from interlock.adapters.persistence.whatsapp_group_repository import WhatsAppGroupRepository
 from interlock.config import Settings
 from interlock.domain.common.actor import Actor, ActorKind
 from interlock.domain.common.clock import Clock
 from interlock.domain.ports.repositories import AuditSink, TaskRepository
+from interlock.domain.ports.sheets import SpreadsheetProvider
 from interlock.domain.ports.whatsapp import WhatsAppProvider
 from interlock.services.review_service import ReviewService
 from interlock.services.scheduler_service import SchedulerService
 from interlock.services.sharing_service import SharingService
+from interlock.services.sheet_sync_service import SheetSyncService
 from interlock.services.task_service import TaskService
 
 
@@ -43,6 +46,10 @@ def get_clock(request: Request) -> Clock:
 
 def get_whatsapp(request: Request) -> WhatsAppProvider:
     return request.app.state.whatsapp  # type: ignore[no-any-return]
+
+
+def get_sheets(request: Request) -> SpreadsheetProvider:
+    return request.app.state.sheets  # type: ignore[no-any-return]
 
 
 def get_session(request: Request) -> Iterator[Session]:
@@ -118,6 +125,10 @@ def get_group_repo(session: Session = Depends(get_session)) -> WhatsAppGroupRepo
     return WhatsAppGroupRepository(session)
 
 
+def get_sync_repo(session: Session = Depends(get_session)) -> SyncRepository:
+    return SyncRepository(session)
+
+
 def get_sequences(session: Session = Depends(get_session)) -> PostgresSequences:
     return PostgresSequences(session)
 
@@ -184,6 +195,17 @@ def get_scheduler_service(
         claim_batch_size=settings.claim_batch_size,
         enforce_day_boundary=settings.enforce_day_boundary,
         strict_data_drift=settings.strict_data_drift,
+    )
+
+
+def get_sheet_sync_service(
+    sheets: SpreadsheetProvider = Depends(get_sheets),
+    sync_repo: SyncRepository = Depends(get_sync_repo),
+    task_repo: TaskRepository = Depends(get_task_repo),
+    audit: AuditSink = Depends(get_audit),
+) -> SheetSyncService:
+    return SheetSyncService(
+        sheets=sheets, sync_repo=sync_repo, task_repo=task_repo, audit=audit
     )
 
 

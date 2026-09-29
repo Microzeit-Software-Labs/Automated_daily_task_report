@@ -1013,6 +1013,137 @@
           }
         }
       }
+    },
+    "/sync/conflicts": {
+      "get": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "List Conflicts",
+        "operationId": "list_conflicts_sync_conflicts_get",
+        "parameters": [
+          {
+            "name": "open_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Open Only"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SyncConflictOut"
+                  },
+                  "title": "Response List Conflicts Sync Conflicts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/conflicts/{conflict_id}/resolve": {
+      "post": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "Resolve Conflict",
+        "operationId": "resolve_conflict_sync_conflicts__conflict_id__resolve_post",
+        "parameters": [
+          {
+            "name": "conflict_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conflict Id"
+            }
+          },
+          {
+            "name": "x-actor-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Actor-Id"
+            }
+          },
+          {
+            "name": "x-actor-name",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Actor-Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveConflictRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncConflictOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1344,6 +1475,15 @@
         ],
         "title": "CommitTaskUpdate"
       },
+      "ConflictResolution": {
+        "type": "string",
+        "enum": [
+          "kept_db",
+          "kept_sheet"
+        ],
+        "title": "ConflictResolution",
+        "description": "A human's decision on a parked collision. Shared by the service layer,\nthe API schema, and the database CHECK constraint (``models/sync.py``'s\n``RESOLUTIONS``) so the three cannot drift to accept different values."
+      },
       "GroupCandidateOut": {
         "properties": {
           "external_jid": {
@@ -1427,6 +1567,19 @@
         ],
         "title": "RecipientState",
         "description": "One group, one job. The actual unit of delivery."
+      },
+      "ResolveConflictRequest": {
+        "properties": {
+          "resolution": {
+            "$ref": "#/components/schemas/ConflictResolution"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "resolution"
+        ],
+        "title": "ResolveConflictRequest"
       },
       "ResolveGroupRequest": {
         "properties": {
@@ -1588,6 +1741,91 @@
           "error_detail"
         ],
         "title": "ShareRecipientOut"
+      },
+      "SyncConflictOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "detected_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Detected At"
+          },
+          "db_value": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Db Value"
+          },
+          "external_value": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Value"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution"
+          },
+          "resolved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved By"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "is_open": {
+            "type": "boolean",
+            "title": "Is Open"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "task_id",
+          "detected_at",
+          "db_value",
+          "external_value",
+          "resolution",
+          "resolved_by",
+          "resolved_at",
+          "is_open"
+        ],
+        "title": "SyncConflictOut"
       },
       "TaskCreateRequest": {
         "properties": {
@@ -1915,7 +2153,8 @@
           "APP",
           "GOOGLE_SHEETS",
           "EXCEL",
-          "IMPORT"
+          "IMPORT",
+          "SHEET_IMPORT"
         ],
         "title": "TaskSourceKind",
         "description": "Where a task last came from. Used for audit, not for routing."
@@ -1969,6 +2208,10 @@
             "type": "integer",
             "title": "Modified Today"
           },
+          "completed_today": {
+            "type": "integer",
+            "title": "Completed Today"
+          },
           "total": {
             "type": "integer",
             "title": "Total"
@@ -1989,6 +2232,7 @@
           "due_today",
           "newly_added",
           "modified_today",
+          "completed_today",
           "total",
           "remaining"
         ],

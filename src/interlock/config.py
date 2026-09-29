@@ -81,15 +81,34 @@ class Settings(BaseSettings):
     whatsapp_provider: WhatsAppProviderName = WhatsAppProviderName.MOCK
     max_message_length: int = 4096
 
+    # --- WhatsApp local agent (Phase 3) ------------------------------------
+    # local_agent talks to a separate Node.js process (apps/agent/) over a
+    # Postgres outbox -- see adapters/whatsapp/local_agent.py. Uses Baileys,
+    # an unofficial client that violates WhatsApp's ToS; the ack flag below
+    # is a deliberate second gate on top of whatsapp_provider itself. See
+    # docs/whatsapp-agent-setup.md before setting either.
+    whatsapp_local_agent_tos_ack: bool = False
+    whatsapp_agent_poll_interval_ms: int = Field(default=200, ge=20)
+    whatsapp_agent_command_timeout_seconds: int = Field(default=20, ge=1)
+    whatsapp_agent_heartbeat_stale_seconds: int = Field(default=90, ge=1)
+
     # --- Google Sheets sync ------------------------------------------------
     # MOCK (an in-memory fake) is the safe default, exactly like
-    # whatsapp_provider defaults to MOCK until the local agent ships -- the
-    # sync tick always runs, harmlessly, until GOOGLE is configured below.
+    # whatsapp_provider defaults to MOCK until the local agent ships. Under
+    # MOCK the worker skips the sync tick entirely (see workers/loop.py) --
+    # until GOOGLE is configured below, nothing syncs.
     sheets_provider: SheetsProviderName = SheetsProviderName.MOCK
     google_service_account_path: str | None = None
     google_sheets_spreadsheet_id: str | None = None
     google_sheets_sheet_name: str = "Tasks"
     sheet_sync_interval_seconds: int = 60
+
+    # --- Read-only sheet import -------------------------------------------
+    # The link to a hand-kept sheet (shared "anyone with the link can view"),
+    # mirrored one-way into tasks every sheet_sync_interval_seconds. Unset =
+    # off. Mutually exclusive with sheets_provider=google. See
+    # docs/sheet-import-setup.md.
+    sheet_import_url: str | None = None
 
     # --- Feature flags ----------------------------------------------------
     allow_custom_send_time: bool = True

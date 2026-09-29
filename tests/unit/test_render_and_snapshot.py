@@ -31,7 +31,7 @@ YESTERDAY = dt.date(2026, 9, 14)
 
 def sample_tasks() -> list:
     return [
-        make_task(title="Deploy production server", status=TaskStatus.COMPLETED),
+        make_task(title="Deploy production server", status=TaskStatus.COMPLETED, completed_at=NOW),
         make_task(title="Customer integration", status=TaskStatus.IN_PROGRESS),
         make_task(title="Database migration", status=TaskStatus.PENDING,
                   due_date=YESTERDAY, priority=Priority.HIGH),
@@ -81,7 +81,7 @@ class TestRendering:
     def test_evening_report_contains_the_headline_counts(self) -> None:
         body = render_default()
         assert "*End of Day Task Update*" in body
-        assert "Completed: 1" in body
+        assert "Completed today: 1" in body
         assert "In Progress: 1" in body
         assert "Pending: 1" in body
 
@@ -102,6 +102,49 @@ class TestRendering:
 
     def test_output_has_no_runaway_blank_lines(self) -> None:
         assert "\n\n\n" not in render_default()
+
+    @pytest.mark.parametrize("template", [DEFAULT_MORNING_TEMPLATE, DEFAULT_EVENING_TEMPLATE])
+    def test_every_task_starts_on_its_own_line(self, template: str) -> None:
+        """Regression: an {% endif %} ending each status line swallowed the
+        newline (trim_blocks), gluing "In Progress" to the next task's
+        number -- in every report ever sent."""
+        lines = render_default(template).splitlines()
+        for number, title in enumerate(
+            ["Database migration", "Customer integration", "Deploy production server"], start=1
+        ):
+            assert f"{number}. {title}" in lines
+        assert not any(line.rstrip().endswith(("Progress2.", "Pending2.")) for line in lines)
+        assert "   \U0001f534 Pending — overdue" in lines
+
+    def test_a_task_completed_on_an_earlier_day_is_not_listed(self) -> None:
+        """With months of history in the task list, "top 15 by urgency" would
+        otherwise be 15 long-closed tasks."""
+        old = make_task(
+            title="Closed back in April",
+            status=TaskStatus.COMPLETED,
+            completed_at=NOW - dt.timedelta(days=150),
+        )
+        tasks = [*sample_tasks(), old]
+        context = build_context(tasks, summarize(tasks, today=TODAY, tz=IST), now=NOW, tz=IST)
+        titles = [task["title"] for task in context["tasks"]]
+        assert "Closed back in April" not in titles
+        assert "Deploy production server" in titles  # completed today: still listed
+
+    def test_completed_today_sorts_after_every_open_task(self) -> None:
+        tasks = sample_tasks()
+        context = build_context(tasks, summarize(tasks, today=TODAY, tz=IST), now=NOW, tz=IST)
+        assert context["tasks"][-1]["title"] == "Deploy production server"
+
+    def test_completed_today_counts_only_today(self) -> None:
+        tasks = [
+            *sample_tasks(),
+            make_task(
+                title="Old", status=TaskStatus.COMPLETED, completed_at=NOW - dt.timedelta(days=2)
+            ),
+        ]
+        summary = summarize(tasks, today=TODAY, tz=IST)
+        assert summary.completed_today == 1
+        assert summary.completed == 2  # the all-time count is unchanged
 
     def test_overlong_report_fails_loudly(self) -> None:
         """Truncating a report silently is worse than refusing to send it."""

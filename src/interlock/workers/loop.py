@@ -22,6 +22,7 @@ import os
 import signal
 import socket
 import time
+from collections.abc import Callable
 from types import FrameType
 
 import structlog
@@ -35,16 +36,16 @@ from interlock.adapters.persistence.share_repository import ShareRepository
 from interlock.adapters.persistence.sync_repository import SyncRepository
 from interlock.adapters.persistence.task_repository import PostgresTaskRepository
 from interlock.adapters.persistence.whatsapp_group_repository import WhatsAppGroupRepository
-from interlock.adapters.sheets.fake import FakeSpreadsheetProvider
-from interlock.adapters.sheets.google_sheets import GoogleSheetsProvider
-from interlock.adapters.whatsapp.mock import MockWhatsAppProvider
-from interlock.config import Settings, SheetsProviderName, WhatsAppProviderName, get_settings
-from interlock.domain.common.clock import SystemClock
+from interlock.adapters.sheets.factory import build_sheet_import_fetch, build_sheets_provider
+from interlock.adapters.whatsapp.factory import build_whatsapp_provider
+from interlock.config import Settings, SheetsProviderName, get_settings
+from interlock.domain.common.clock import Clock, SystemClock
 from interlock.domain.ports.sheets import SpreadsheetProvider
 from interlock.domain.ports.whatsapp import WhatsAppProvider
 from interlock.services.review_service import ReviewService
 from interlock.services.review_trigger import maybe_create_daily_reviews
 from interlock.services.scheduler_service import SchedulerService
+from interlock.services.sheet_import_service import SheetImportService
 from interlock.services.sheet_sync_service import SheetSyncService
 
 log = structlog.get_logger(__name__)
@@ -69,37 +70,14 @@ def _handle_shutdown_signal(signum: int, _frame: FrameType | None) -> None:
     _shutdown_requested = True
 
 
-def _build_whatsapp_provider(settings: Settings, clock: SystemClock) -> WhatsAppProvider:
-    if settings.whatsapp_provider is not WhatsAppProviderName.MOCK:
-        raise NotImplementedError(
-            f"WHATSAPP_PROVIDER={settings.whatsapp_provider.value!r} is not implemented "
-            "in Phase 1. Only 'mock' is available until the local agent (Phase 3) ships."
-        )
-    return MockWhatsAppProvider(clock)
-
-
-def _build_sheets_provider(settings: Settings) -> SpreadsheetProvider:
-    if settings.sheets_provider is SheetsProviderName.MOCK:
-        return FakeSpreadsheetProvider()
-    if not settings.google_service_account_path or not settings.google_sheets_spreadsheet_id:
-        raise RuntimeError(
-            "SHEETS_PROVIDER=google requires GOOGLE_SERVICE_ACCOUNT_PATH and "
-            "GOOGLE_SHEETS_SPREADSHEET_ID to be set -- see docs/google-sheets-setup.md."
-        )
-    return GoogleSheetsProvider(
-        service_account_path=settings.google_service_account_path,
-        spreadsheet_id=settings.google_sheets_spreadsheet_id,
-        sheet_name=settings.google_sheets_sheet_name,
-    )
-
-
 def run_one_tick(
     session_factory: sessionmaker,  # type: ignore[type-arg]
     *,
     settings: Settings,
-    clock: SystemClock,
+    clock: Clock,
     whatsapp: WhatsAppProvider,
-    sheets: SpreadsheetProvider,
+    sheets: SpreadsheetProvider | None,
+    sheet_import: Callable[[], str] | None = None,
     worker_id: str,
     next_sheet_sync_at: dt.datetime,
 ) -> dt.datetime:
@@ -179,7 +157,43 @@ def run_one_tick(
     finally:
         session.close()
 
-    if now >= next_sheet_sync_at:
+    # The read-only import and the two-way sync share this slot and its
+    # cadence; build_sheet_import_fetch guarantees at most one is configured.
+    if sheet_import is not None and now >= next_sheet_sync_at:
+        session = session_factory()
+        try:
+            import_result = SheetImportService(
+                fetch=sheet_import,
+                task_repo=PostgresTaskRepository(session),
+                audit=PostgresAuditSink(session),
+                tz=settings.tz,
+            ).tick(now=now)
+            session.commit()
+            if import_result.changed_anything or import_result.unrecognised_status:
+                log.info(
+                    "worker.sheet_import_tick",
+                    created=import_result.created,
+                    updated=import_result.updated,
+                    hidden=import_result.hidden,
+                    unhidden=import_result.unhidden,
+                    unrecognised_status=list(import_result.unrecognised_status),
+                )
+            if import_result.skipped:
+                log.warning(
+                    "worker.sheet_import_rows_skipped",
+                    rows=[
+                        f"row {skip.line}: {skip.reason.value} {skip.detail}"
+                        for skip in import_result.skipped
+                    ],
+                )
+        except Exception:
+            session.rollback()
+            log.exception("worker.sheet_import_tick_failed")
+        finally:
+            session.close()
+        next_sheet_sync_at = now + dt.timedelta(seconds=settings.sheet_sync_interval_seconds)
+
+    if sheets is not None and now >= next_sheet_sync_at:
         session = session_factory()
         try:
             sheet_sync = SheetSyncService(
@@ -229,8 +243,18 @@ def main() -> None:
     clock = SystemClock()
     engine = make_engine(settings.database_url)
     session_factory = make_session_factory(engine)
-    whatsapp = _build_whatsapp_provider(settings, clock)
-    sheets = _build_sheets_provider(settings)
+    whatsapp = build_whatsapp_provider(settings, clock=clock, session_factory=session_factory)
+    # No provider at all under MOCK, rather than the in-memory fake: the fake
+    # forgets every row when the process exits, but the reconciliation cursor
+    # a tick writes to Postgres does not. Ticking against it would leave every
+    # task "synced to a row that no longer exists", and the first real run
+    # would park all of them as vanished instead of pushing them.
+    sheets = (
+        None
+        if settings.sheets_provider is SheetsProviderName.MOCK
+        else build_sheets_provider(settings)
+    )
+    sheet_import = build_sheet_import_fetch(settings)
     worker_id = f"worker-{socket.gethostname()}-{os.getpid()}"
     next_sheet_sync_at = clock.now()
 
@@ -243,6 +267,7 @@ def main() -> None:
         tick_seconds=settings.scheduler_tick_seconds,
         timezone=settings.timezone,
         sheets_provider=settings.sheets_provider.value,
+        sheet_import=sheet_import is not None,
         sheet_sync_interval_seconds=settings.sheet_sync_interval_seconds,
     )
 
@@ -254,6 +279,7 @@ def main() -> None:
                 clock=clock,
                 whatsapp=whatsapp,
                 sheets=sheets,
+                sheet_import=sheet_import,
                 worker_id=worker_id,
                 next_sheet_sync_at=next_sheet_sync_at,
             )

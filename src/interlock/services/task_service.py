@@ -14,7 +14,7 @@ from typing import Any
 
 from interlock.domain.common.actor import Actor
 from interlock.domain.common.clock import Clock
-from interlock.domain.common.errors import DomainError, NotFoundError
+from interlock.domain.common.errors import DomainError, NotFoundError, ValidationFailedError
 from interlock.domain.common.ids import TASK_PREFIX, format_display_id, new_id
 from interlock.domain.ports.repositories import AuditSink, TaskFilter, TaskRepository
 from interlock.domain.tasks.entities import (
@@ -127,6 +127,15 @@ class TaskService:
         current = self._repo.get(task_id)
         if current is None:
             raise NotFoundError(f"Task {task_id} does not exist.", task_id=task_id)
+        if current.source is TaskSourceKind.SHEET_IMPORT:
+            # The sheet owns this task: an edit here would be silently
+            # overwritten by the next import tick, within a minute.
+            raise ValidationFailedError(
+                f"{current.display_id} comes from your Google Sheet -- edit it there. "
+                "Interlock picks the change up within a minute.",
+                task_id=task_id,
+                source=current.source.value,
+            )
 
         now = self._clock.now()
         updated = apply_edit(current, changes, now=now)

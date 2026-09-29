@@ -29,6 +29,9 @@ class TaskSummary:
     due_today: int = 0
     newly_added: int = 0
     modified_today: int = 0
+    completed_today: int = 0
+    """COMPLETED with ``completed_at`` on ``today`` -- unlike ``completed``,
+    which counts every completed task ever and is not a daily figure."""
     total: int = 0
 
     @property
@@ -61,13 +64,15 @@ def summarize(
         TaskStatus.BLOCKED: 0,
         TaskStatus.DEFERRED: 0,
     }
-    overdue = due_today = newly_added = modified_today = total = 0
+    overdue = due_today = newly_added = modified_today = completed_today = total = 0
 
     for task in tasks:
         if task.is_deleted:
             continue
         total += 1
         counts[task.status] += 1
+        if is_completed_on(task, today, tz):
+            completed_today += 1
 
         if is_overdue(task.due_date, task.status, today):
             overdue += 1
@@ -92,7 +97,16 @@ def summarize(
         due_today=due_today,
         newly_added=newly_added,
         modified_today=modified_today,
+        completed_today=completed_today,
         total=total,
+    )
+
+
+def is_completed_on(task: Task, day: dt.date, tz: ZoneInfo) -> bool:
+    return (
+        task.status is TaskStatus.COMPLETED
+        and task.completed_at is not None
+        and local_date(task.completed_at, tz) == day
     )
 
 

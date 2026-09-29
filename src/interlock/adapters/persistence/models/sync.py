@@ -19,8 +19,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from interlock.adapters.persistence.base import Base
 from interlock.adapters.persistence.types import TIMESTAMPTZ, ULID_LENGTH, check_in
+from interlock.domain.sync.reconciliation import ConflictResolution
 
-RESOLUTIONS = ("kept_db", "kept_sheet")
+RESOLUTIONS = tuple(member.value for member in ConflictResolution)
 
 
 class TaskSheetSyncRow(Base):

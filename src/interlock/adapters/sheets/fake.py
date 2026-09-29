@@ -3,11 +3,15 @@ Google credentials configured at all.
 
 Plays the same role for the sync tick that
 :class:`~interlock.adapters.whatsapp.mock.MockWhatsAppProvider` plays for
-sends: the safe default (``SHEETS_PROVIDER=mock``) so the worker's sheet-sync
-tick is a harmless no-op until real credentials are wired up, and a
-controllable double tests drive directly -- seeding rows to simulate a
-sheet that already has data, mutating a row's fields to simulate a human
-editing it between ticks, deleting a row to simulate one vanishing.
+sends: the safe default (``SHEETS_PROVIDER=mock``) the API is wired with until
+real credentials exist, and a controllable double tests drive directly --
+seeding rows to simulate a sheet that already has data, mutating a row's
+fields to simulate a human editing it between ticks, deleting a row to
+simulate one vanishing.
+
+The worker deliberately does *not* tick against this under ``mock``: it
+forgets every row on exit while the Postgres reconciliation cursor does not
+(see ``workers/loop.py``).
 """
 
 from __future__ import annotations

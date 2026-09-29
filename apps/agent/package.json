@@ -1,0 +1,26 @@
+{
+  "name": "interlock-whatsapp-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local Baileys WhatsApp agent for Interlock -- see docs/whatsapp-agent-setup.md. Unofficial (violates WhatsApp's ToS); read the setup doc before running this.",
+  "main": "dist/src/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/src/index.js",
+    "test": "tsc && node --test"
+  },
+  "dependencies": {
+    "@hapi/boom": "10.0.1",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "dotenv": "18.0.4",
+    "pg": "8.23.0",
+    "pino": "10.3.1",
+    "qrcode-terminal": "0.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.4",
+    "@types/pg": "8.23.1",
+    "@types/qrcode-terminal": "0.12.2",
+    "typescript": "7.0.2"
+  }
+}

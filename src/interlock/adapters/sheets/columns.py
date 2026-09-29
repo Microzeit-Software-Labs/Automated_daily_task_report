@@ -5,11 +5,12 @@ unit-tested against plain fixtures and reused unchanged by both
 :class:`~interlock.adapters.sheets.google_sheets.GoogleSheetsProvider` and
 :class:`~interlock.adapters.sheets.fake.FakeSpreadsheetProvider`.
 
-Column order is *not* load-bearing: every read looks up each column by its
-header text, so a human reordering columns in the sheet does not break
-parsing. Only the presence of the ``_sys`` column and the header names below
-matters -- see ``docs/google-sheets-setup.md`` for the exact header row a
-new sheet needs.
+Reads look each column up by its header text, but writes are positional
+(:func:`~interlock.adapters.sheets.google_sheets._row_values` emits
+``HEADER_ROW`` order starting at column A), so the sheet's A..K layout must
+match ``HEADER_ROW`` exactly -- a reordered column would have values written
+into the wrong cells. See ``docs/google-sheets-setup.md`` for the exact header
+row a new sheet needs.
 """
 
 from __future__ import annotations

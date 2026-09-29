@@ -59,6 +59,9 @@ class TaskSourceKind(StrEnum):
     GOOGLE_SHEETS = "GOOGLE_SHEETS"
     EXCEL = "EXCEL"
     IMPORT = "IMPORT"
+    SHEET_IMPORT = "SHEET_IMPORT"
+    """Mirrored read-only from a hand-kept sheet (services/sheet_import_service.py).
+    The sheet owns these tasks: TaskService refuses to edit them."""
 
 
 MAX_TITLE_LENGTH = 300

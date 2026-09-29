@@ -29,6 +29,7 @@ from interlock.adapters.persistence.scheduler_repository import SchedulerReposit
 from interlock.adapters.persistence.share_repository import ShareRepository
 from interlock.adapters.persistence.task_repository import PostgresTaskRepository
 from interlock.adapters.persistence.whatsapp_group_repository import WhatsAppGroupRepository
+from interlock.adapters.sheets.fake import FakeSpreadsheetProvider
 from interlock.adapters.whatsapp.mock import MockWhatsAppProvider
 from interlock.api.main import create_app
 from interlock.config import Settings
@@ -81,7 +82,8 @@ def clean_db(_migrated: None) -> Iterator[None]:
                 "TRUNCATE TABLE "
                 "share_recipients, share_jobs, report_snapshots, task_history, "
                 "tasks, approval_requests, scheduled_actions, whatsapp_groups, "
-                "idempotency_keys, audit_logs, users "
+                "idempotency_keys, audit_logs, users, "
+                "whatsapp_agent_commands, whatsapp_agent_status "
                 "RESTART IDENTITY CASCADE"
             )
         )
@@ -100,11 +102,21 @@ def whatsapp(clock: FrozenClock) -> MockWhatsAppProvider:
 
 
 @pytest.fixture
+def sheets() -> FakeSpreadsheetProvider:
+    return FakeSpreadsheetProvider()
+
+
+@pytest.fixture
 def client(
-    clean_db: None, clock: FrozenClock, whatsapp: MockWhatsAppProvider
+    clean_db: None,
+    clock: FrozenClock,
+    whatsapp: MockWhatsAppProvider,
+    sheets: FakeSpreadsheetProvider,
 ) -> Iterator[TestClient]:
     settings = _test_settings()
-    app = create_app(settings=settings, clock=clock, whatsapp_provider=whatsapp)
+    app = create_app(
+        settings=settings, clock=clock, whatsapp_provider=whatsapp, sheets_provider=sheets
+    )
     with TestClient(app) as test_client:
         yield test_client
 

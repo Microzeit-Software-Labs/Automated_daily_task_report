@@ -21,6 +21,7 @@ from interlock.domain.approvals.request import ApprovalKind, ApprovalRequest
 from interlock.domain.approvals.states import ApprovalState, RecipientState, ShareJobState
 from interlock.domain.sharing.group import WhatsAppGroup
 from interlock.domain.sharing.job import ShareJob, ShareRecipient
+from interlock.domain.sync.reconciliation import ConflictResolution, SyncConflict
 from interlock.domain.tasks.entities import Priority, Task, TaskSourceKind, TaskStatus
 from interlock.domain.tasks.summary import ChangeSummary, TaskSummary
 from interlock.services.review_service import ReviewDetail
@@ -250,6 +251,7 @@ class TaskSummaryOut(BaseModel):
     due_today: int
     newly_added: int
     modified_today: int
+    completed_today: int
     total: int
     remaining: int
 
@@ -340,6 +342,38 @@ class ResolveGroupRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
+
+
+class SyncConflictOut(BaseModel):
+    id: str
+    task_id: str
+    detected_at: dt.datetime
+    db_value: dict[str, Any]
+    external_value: dict[str, Any] | None
+    resolution: str | None
+    resolved_by: str | None
+    resolved_at: dt.datetime | None
+    is_open: bool
+
+    @classmethod
+    def from_entity(cls, conflict: SyncConflict) -> SyncConflictOut:
+        return cls(
+            id=conflict.id,
+            task_id=conflict.task_id,
+            detected_at=conflict.detected_at,
+            db_value=conflict.db_value,
+            external_value=conflict.external_value,
+            resolution=conflict.resolution,
+            resolved_by=conflict.resolved_by,
+            resolved_at=conflict.resolved_at,
+            is_open=conflict.is_open,
+        )
+
+
+class ResolveConflictRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resolution: ConflictResolution
 
 
 class ErrorDetail(BaseModel):

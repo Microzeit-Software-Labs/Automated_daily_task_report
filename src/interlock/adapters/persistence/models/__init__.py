@@ -17,6 +17,10 @@ from interlock.adapters.persistence.models.sync import SyncConflictRow, TaskShee
 from interlock.adapters.persistence.models.tasks import TaskHistoryRow, TaskRow
 from interlock.adapters.persistence.models.users import UserRow
 from interlock.adapters.persistence.models.whatsapp import WhatsAppGroupRow
+from interlock.adapters.persistence.models.whatsapp_agent import (
+    WhatsAppAgentCommandRow,
+    WhatsAppAgentStatusRow,
+)
 
 __all__ = [
     "ApprovalRequestRow",
@@ -31,5 +35,7 @@ __all__ = [
     "TaskRow",
     "TaskSheetSyncRow",
     "UserRow",
+    "WhatsAppAgentCommandRow",
+    "WhatsAppAgentStatusRow",
     "WhatsAppGroupRow",
 ]

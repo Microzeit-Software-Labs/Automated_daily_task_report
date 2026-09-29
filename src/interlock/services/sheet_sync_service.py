@@ -34,11 +34,14 @@ from interlock.domain.common.ids import TASK_PREFIX, format_display_id, new_id
 from interlock.domain.ports.repositories import AuditSink, TaskFilter, TaskRepository
 from interlock.domain.ports.sheets import SheetRow, SheetRowWrite, SpreadsheetProvider
 from interlock.domain.sync.reconciliation import (
+    ConflictResolution,
     SyncAction,
     SyncConflict,
+    canonicalize,
     content_hash,
     decide_action,
     editable_fields,
+    resolve_baseline,
     task_content_fields,
 )
 from interlock.domain.tasks.entities import (
@@ -116,9 +119,14 @@ class SheetSyncService:
                     vanished += 1
                 continue
 
-            sheet_hash = content_hash(editable_fields(sheet_row.fields))
-            db_changed = state is None or task.version != state.last_synced_version
-            sheet_changed = state is None or sheet_hash != state.last_synced_content_hash
+            sheet_hash = content_hash(canonicalize(editable_fields(sheet_row.fields)))
+            baseline = resolve_baseline(
+                state=state,
+                stamped_version=sheet_row.sys_version,
+                stamped_content_hash=sheet_row.sys_content_hash,
+            )
+            db_changed = baseline is None or task.version != baseline.version
+            sheet_changed = baseline is None or sheet_hash != baseline.content_hash
             action = decide_action(db_changed=db_changed, sheet_changed=sheet_changed)
 
             if action is SyncAction.NOOP:
@@ -161,7 +169,12 @@ class SheetSyncService:
         )
 
     def resolve_conflict(
-        self, conflict_id: str, *, resolution: str, resolved_by: str, now: dt.datetime
+        self,
+        conflict_id: str,
+        *,
+        resolution: ConflictResolution,
+        resolved_by: str,
+        now: dt.datetime,
     ) -> SyncConflict:
         """A human's decision on a parked collision. Either side may be
         chosen -- the conflict itself never implies which one is "right".
@@ -186,11 +199,11 @@ class SheetSyncService:
         )
         row_index = current_row.row_index if current_row is not None else None
 
-        if resolution == "kept_db":
+        if resolution is ConflictResolution.KEPT_DB:
             write = self._push_write(task, row_index=row_index)
             self._sheets.write_rows([write])
             self._stamp_synced(task, at=now, row_index=write.row_index)
-        elif resolution == "kept_sheet":
+        elif resolution is ConflictResolution.KEPT_SHEET:
             if conflict.external_value is None:
                 raise ValidationFailedError(
                     "Cannot keep the sheet's value: the row no longer exists.",
@@ -207,13 +220,9 @@ class SheetSyncService:
             write = self._push_write(updated, row_index=row_index)
             self._sheets.write_rows([write])
             self._stamp_synced(updated, at=now, row_index=write.row_index)
-        else:
-            raise ValidationFailedError(
-                f"Unknown resolution {resolution!r}.", resolution=resolution
-            )
 
         return self._sync.resolve_conflict(
-            conflict_id, resolution=resolution, resolved_by=resolved_by, resolved_at=now
+            conflict_id, resolution=resolution.value, resolved_by=resolved_by, resolved_at=now
         )
 
     # -- helpers --------------------------------------------------------------
@@ -222,18 +231,22 @@ class SheetSyncService:
         self._sync.upsert_state(
             task.id,
             version=task.version,
-            content_hash=content_hash(task_content_fields(task)),
+            content_hash=content_hash(canonicalize(task_content_fields(task))),
             at=at,
             row_index=row_index,
         )
 
     def _push_write(self, task: Task, *, row_index: int | None = None) -> SheetRowWrite:
+        # The written cell values keep the task's own (possibly non-canonical)
+        # strings -- only the stamp needs to be canonical, so that it matches
+        # what tick() recomputes from this same row once parse_field_value's
+        # own whitespace-stripping has applied on the next read.
         fields = task_content_fields(task)
         return SheetRowWrite(
             row_index=row_index,
             sys_task_id=task.id,
             sys_version=task.version,
-            sys_content_hash=content_hash(fields),
+            sys_content_hash=content_hash(canonicalize(fields)),
             display_id=task.display_id,
             fields=fields,
         )
@@ -303,7 +316,20 @@ def _sheet_changes(task: Task, sheet_row: SheetRow) -> dict[str, Any]:
     changes: dict[str, Any] = {}
     for name, raw_value in editable_fields(sheet_row.fields).items():
         coerced = _coerce(name, raw_value)
-        if coerced is None and name not in _NULLABLE_FIELDS:
+        # None means "did not parse" for every field -- except a nullable one
+        # whose cell is genuinely blank, where None is the intended value.
+        # Without the `raw_value` check, a mistyped date ("20/9/2026") would
+        # be indistinguishable from a blank cell and silently erase the
+        # task's due date.
+        if coerced is None and (name not in _NULLABLE_FIELDS or raw_value):
+            continue
+        if name == "title" and isinstance(coerced, str) and not coerced.strip():
+            # A blank title cell parses fine (it is just ""), unlike an
+            # invalid enum -- so it is not caught by the check above. But
+            # Task rejects an empty title outright, so applying it here
+            # would raise out of apply_edit() and take the whole tick down
+            # with it, not just this one row. Drop it the same way an
+            # actually-unparseable cell is dropped.
             continue
         if coerced != getattr(task, name):
             changes[name] = coerced

@@ -37,6 +37,15 @@ class SyncAction(StrEnum):
     """Both changed. Touch neither side -- park it for a human to resolve."""
 
 
+class ConflictResolution(StrEnum):
+    """A human's decision on a parked collision. Shared by the service layer,
+    the API schema, and the database CHECK constraint (``models/sync.py``'s
+    ``RESOLUTIONS``) so the three cannot drift to accept different values."""
+
+    KEPT_DB = "kept_db"
+    KEPT_SHEET = "kept_sheet"
+
+
 def decide_action(*, db_changed: bool, sheet_changed: bool) -> SyncAction:
     """The reconciliation truth table, and nothing more than it.
 
@@ -87,6 +96,31 @@ def content_hash(fields: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+_FREE_TEXT_FIELDS = frozenset({"title", "description", "remarks"})
+
+
+def canonicalize(fields: dict[str, Any]) -> dict[str, Any]:
+    """Normalize free-text fields so the same logical value hashes
+    identically regardless of which side produced it.
+
+    ``adapters.sheets.columns.parse_field_value`` strips whitespace on every
+    cell it reads back; a task's own stored fields carry no such guarantee
+    (``Task`` only rejects a *blank* title, it does not trim one). Without
+    this, a title/description/remarks value with incidental surrounding
+    whitespace would hash differently depending on which side produced it,
+    and -- since neither side's hash routine strips on write -- never
+    converge. Idempotent, so calling it on an already-canonical mapping
+    (or twice, as :func:`resolve_baseline`'s caller does for both sides) is
+    harmless.
+    """
+    result = dict(fields)
+    for name in _FREE_TEXT_FIELDS:
+        value = result.get(name)
+        if isinstance(value, str):
+            result[name] = value.strip()
+    return result
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class SyncState:
     """The reconciliation cursor for one task -- what was true as of the last
@@ -97,6 +131,43 @@ class SyncState:
     last_synced_content_hash: str
     last_synced_at: dt.datetime
     last_known_row_index: int | None = None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Baseline:
+    """What both sides last agreed on -- either the durable cursor, or, when
+    that is missing, the sheet row's own ``_sys`` stamp."""
+
+    version: int
+    content_hash: str
+
+
+def resolve_baseline(
+    *,
+    state: SyncState | None,
+    stamped_version: int | None,
+    stamped_content_hash: str | None,
+) -> Baseline | None:
+    """The durable cursor (``SyncRepository``'s :class:`SyncState`) wins when
+    it exists. Otherwise fall back to the row's own ``_sys`` stamp -- written
+    on every push, so a row already carrying one has genuinely been synced
+    before even though *this* task's cursor row is missing (a restored
+    database, or the first real tick after switching
+    ``SHEETS_PROVIDER=mock`` to ``google``). ``None`` -- no baseline at all,
+    meaning both sides count as changed -- only when neither is usable,
+    which is genuine first contact between this task and this row.
+
+    A stamp is only usable whole: a version with no hash, or a hash with no
+    version, cannot happen from a write this service ever made, so a partial
+    stamp is treated the same as no stamp rather than guessed at.
+    """
+    if state is not None:
+        return Baseline(
+            version=state.last_synced_version, content_hash=state.last_synced_content_hash
+        )
+    if stamped_version is not None and stamped_content_hash is not None:
+        return Baseline(version=stamped_version, content_hash=stamped_content_hash)
+    return None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

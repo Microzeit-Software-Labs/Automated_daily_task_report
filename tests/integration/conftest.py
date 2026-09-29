@@ -76,7 +76,8 @@ def migrated_engine() -> Iterator[Engine]:
                 "TRUNCATE TABLE "
                 "share_recipients, share_jobs, report_snapshots, task_history, "
                 "tasks, approval_requests, scheduled_actions, whatsapp_groups, "
-                "idempotency_keys, audit_logs, users "
+                "idempotency_keys, audit_logs, users, "
+                "whatsapp_agent_commands, whatsapp_agent_status "
                 "RESTART IDENTITY CASCADE"
             )
         )

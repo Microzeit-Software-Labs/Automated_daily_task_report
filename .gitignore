@@ -23,6 +23,7 @@ build/
 apps/agent/.wa-session/
 apps/agent/node_modules/
 apps/agent/*.sqlite
+apps/agent/logs/
 
 # OS
 Thumbs.db

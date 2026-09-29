@@ -27,7 +27,7 @@ from interlock.domain.common.clock import ensure_aware
 from interlock.domain.common.errors import MessageTooLongError, TemplateInvalidError
 from interlock.domain.tasks.derivations import is_overdue, sort_key_for_report
 from interlock.domain.tasks.entities import Task, TaskStatus
-from interlock.domain.tasks.summary import TaskSummary
+from interlock.domain.tasks.summary import TaskSummary, is_completed_on
 
 # Everything a template may reference. Anything else raises at validation time.
 ALLOWED_VARIABLES: frozenset[str] = frozenset(
@@ -47,6 +47,7 @@ ALLOWED_VARIABLES: frozenset[str] = frozenset(
         "remaining",
         "newly_added",
         "modified_today",
+        "completed_today",
         "tasks",
     }
 )
@@ -77,7 +78,7 @@ DEFAULT_MORNING_TEMPLATE = """*Morning Task Update*
 \U0001f4c5 {{ date }}
 ⏰ {{ time }}
 
-✅ Completed: {{ completed }}
+✅ Completed today: {{ completed_today }}
 \U0001f7e1 In Progress: {{ in_progress }}
 \U0001f534 Pending: {{ pending }}
 ⚠️ Overdue: {{ overdue }}
@@ -85,7 +86,7 @@ DEFAULT_MORNING_TEMPLATE = """*Morning Task Update*
 *Today's Focus*
 {% for task in tasks %}
 {{ loop.index }}. {{ task.title }}
-   {{ task.glyph }} {{ task.status_label }}{% if task.overdue %} — overdue{% endif %}
+   {{ task.glyph }} {{ task.status_label }}{{ " — overdue" if task.overdue else "" }}
 {% endfor %}
 
 *Summary*
@@ -98,7 +99,7 @@ DEFAULT_EVENING_TEMPLATE = """*End of Day Task Update*
 \U0001f4c5 {{ date }}
 ⏰ {{ time }}
 
-✅ Completed: {{ completed }}
+✅ Completed today: {{ completed_today }}
 \U0001f7e1 In Progress: {{ in_progress }}
 \U0001f534 Pending: {{ pending }}
 ⚠️ Overdue: {{ overdue }}
@@ -107,11 +108,11 @@ DEFAULT_EVENING_TEMPLATE = """*End of Day Task Update*
 *Priority Tasks*
 {% for task in tasks %}
 {{ loop.index }}. {{ task.title }}
-   {{ task.glyph }} {{ task.status_label }}{% if task.overdue %} — overdue{% endif %}
+   {{ task.glyph }} {{ task.status_label }}{{ " — overdue" if task.overdue else "" }}
 {% endfor %}
 
 *Summary*
-Completed: {{ completed }}
+Completed today: {{ completed_today }}
 Remaining: {{ remaining }}
 Overdue: {{ overdue }}
 """
@@ -136,6 +137,11 @@ def default_template_for(kind: str) -> tuple[str, str]:
 
 
 def _environment() -> SandboxedEnvironment:
+    # trim_blocks removes the newline after *any* block tag -- including one
+    # ending a line mid-sentence, like "{% endif %}". That is why the shipped
+    # templates use an inline expression ({{ "x" if cond else "" }}) at the
+    # end of a line instead: an {% endif %} there silently glued every task
+    # line to the next one.
     env = SandboxedEnvironment(
         undefined=StrictUndefined,
         trim_blocks=True,
@@ -165,9 +171,18 @@ def build_context(
     local = now.astimezone(tz)
     today = local.date()
 
+    # Open tasks, plus whatever was finished today. A task completed on any
+    # earlier day is never listed -- with months of history in the task list,
+    # "top 15 by urgency" would otherwise be 15 long-closed tasks. Completed-
+    # today tasks sort after every open one.
     ordered = sorted(
-        (task for task in tasks if not task.is_deleted),
-        key=lambda task: sort_key_for_report(task, today),
+        (
+            task
+            for task in tasks
+            if not task.is_deleted
+            and (task.status is not TaskStatus.COMPLETED or is_completed_on(task, today, tz))
+        ),
+        key=lambda task: (task.status is TaskStatus.COMPLETED, *sort_key_for_report(task, today)),
     )
 
     rendered_tasks = [
