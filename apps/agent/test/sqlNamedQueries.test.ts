@@ -87,6 +87,14 @@ test("loadNamedQueries drops comment lines inside a block", () => {
 // before the agent ever ran.
 const DB_TS_PARAMS: Record<string, Record<string, unknown>> = {
   claim_next: { claimed_by: "w", margin_seconds: 2 },
+  claim_next_control: { claimed_by: "w", margin_seconds: 2 },
+  update_pairing: {
+    pairing_state: "WAITING_FOR_SCAN",
+    pairing_id: "p",
+    pairing_qr: "qr",
+    pairing_qr_at: null,
+    pairing_detail: "",
+  },
   complete: { id: "c", result: "{}" },
   release_transient: { id: "c" },
   reset_stale_claims: {},
@@ -94,6 +102,9 @@ const DB_TS_PARAMS: Record<string, Record<string, unknown>> = {
   upsert_status: {
     state: "CONNECTED",
     detail: "",
+    status_reason: null,
+    account_jid: null,
+    account_name: null,
     agent_version: "0.1.0",
     last_successful_send_at: null,
     last_canary_at: null,
@@ -117,15 +128,17 @@ test("toPositionalQuery raises on a parameter the caller forgot to pass", () => 
   assert.throws(() => toPositionalQuery("SELECT :missing", {}), /missing/);
 });
 
-test("the real agent_queries.sql has exactly the six statements this agent uses", () => {
+test("the real agent_queries.sql has exactly the statements this agent uses", () => {
   const queries = loadNamedQueries(readFileSync(REAL_SQL_PATH, "utf-8"));
   const names = Object.keys(queries).sort();
   assert.deepEqual(names, [
     "claim_next",
+    "claim_next_control",
     "complete",
     "release_transient",
     "reset_stale_claims",
     "set_wa_message_id",
+    "update_pairing",
     "upsert_status",
   ]);
   for (const sql of Object.values(queries)) {

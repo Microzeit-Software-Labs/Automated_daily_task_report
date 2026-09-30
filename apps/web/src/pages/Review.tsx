@@ -1,20 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
-import { api, ApiError, type Group, type ReviewDetail, type Share, type UiConfig } from "../api";
+import { api, type Group, type ReviewDetail, type Share, type UiConfig } from "../api";
 import {
-  defaultRecipientIds,
   formatDate,
   formatTime,
   isOpen,
   isSettling,
   KIND_LABELS,
-  resolveSendAt,
   shareButtonLabel,
-  type SendChoice,
-  whatsappSegments,
 } from "../logic";
 import { href } from "../router";
+import { Report } from "../components/ReportPreview";
+import { useShare } from "../useShare";
 import { ErrorNote, StateChip } from "../ui";
 
 export function Review({ id, config }: { id: string; config: UiConfig }) {
@@ -60,7 +58,7 @@ export function Review({ id, config }: { id: string; config: UiConfig }) {
       </section>
 
       {isOpen(r.state) ? (
-        <Composer detail={d} groups={groups.data ?? []} groupsError={groups.error} config={config} />
+        <Composer detail={d} groupsError={groups.error} config={config} />
       ) : d.shares.length > 0 ? (
         d.shares.map((share) => (
           <Delivery key={share.job.id} share={share} groups={groups.data ?? []} reviewId={id} config={config} />
@@ -111,85 +109,33 @@ function WhatHappened({ detail }: { detail: ReviewDetail }) {
 
 function Composer({
   detail,
-  groups,
   groupsError,
   config,
 }: {
   detail: ReviewDetail;
-  groups: Group[];
   groupsError: unknown;
   config: UiConfig;
 }) {
-  const queryClient = useQueryClient();
   const id = detail.request.id;
-  const preview = useQuery({
-    queryKey: ["preview", id],
-    queryFn: () => api.preview(id),
-    // Follows the sheet import, which can change tasks every minute. The
-    // commit carries this preview's hash, so what's on screen is what sends.
-    refetchInterval: 60_000,
-  });
-  const status = useQuery({ queryKey: ["status"], queryFn: api.status, refetchInterval: 15_000 });
-
-  const [changedNotice, setChangedNotice] = useState(false);
-  const lastHash = useRef<string | null>(null);
-  useEffect(() => {
-    const hash = preview.data?.content_hash;
-    if (!hash) return;
-    if (lastHash.current !== null && lastHash.current !== hash) setChangedNotice(true);
-    lastHash.current = hash;
-  }, [preview.data?.content_hash]);
-
-  const enabled = groups.filter((g) => g.enabled);
-  const [selected, setSelected] = useState<Set<string> | null>(null);
-  useEffect(() => {
-    if (selected === null && groups.length > 0) {
-      setSelected(new Set(defaultRecipientIds(detail.request.kind, groups)));
-    }
-  }, [groups, selected, detail.request.kind]);
-  const chosen = enabled.filter((g) => selected?.has(g.id));
-
-  const [when, setWhen] = useState<SendChoice>({ kind: "now" });
-  const sendAt = resolveSendAt(when, config.timezone);
-
-  const refresh = () => {
-    void queryClient.invalidateQueries({ queryKey: ["review", id] });
-    void queryClient.invalidateQueries({ queryKey: ["reviews"] });
-  };
-
-  const share = useMutation({
-    mutationFn: () => {
-      if (!preview.data) throw new Error("The preview hasn't loaded yet.");
-      if ("error" in sendAt) throw new Error(sendAt.error);
-      return api.commit(
-        id,
-        {
-          mode: "SHARE_ONLY",
-          action_version: detail.shares.length + 1,
-          recipient_group_ids: chosen.map((g) => g.id),
-          send_at: sendAt.sendAt,
-          expected_content_hash: preview.data.content_hash,
-        },
-        crypto.randomUUID(),
-      );
-    },
-    onSuccess: refresh,
-    onError: (error) => {
-      if (error instanceof ApiError && error.code === "DATASET_VERSION_CONFLICT") {
-        void preview.refetch();
-      }
-    },
-  });
-
-  const skip = useMutation({
-    mutationFn: () =>
-      api.commit(id, { mode: "UPDATE_ONLY", action_version: 1 }, crypto.randomUUID()),
-    onSuccess: refresh,
-  });
-
-  const busy = share.isPending || skip.isPending;
-  const canShare = !!preview.data && chosen.length > 0 && !("error" in sendAt) && !busy;
-  const drifted = share.error instanceof ApiError && share.error.code === "DATASET_VERSION_CONFLICT";
+  const {
+    enabled,
+    chosen,
+    isSelected,
+    toggle,
+    preview,
+    status,
+    changedNotice,
+    dismissChanged,
+    drifted,
+    when,
+    setWhen,
+    sendAt,
+    share,
+    skip,
+    busy,
+    ready,
+  } = useShare({ review: detail.request, config, priorShares: detail.shares.length });
+  const canShare = ready && !("error" in sendAt);
 
   return (
     <>
@@ -204,7 +150,7 @@ function Composer({
           <div className="note note-warn" role="status">
             <strong>Your tasks changed</strong>
             <span>The message below has been updated. Read it again before you share.</span>
-            <button className="link" onClick={() => { setChangedNotice(false); share.reset(); }}>
+            <button className="link" onClick={dismissChanged}>
               Got it
             </button>
           </div>
@@ -243,13 +189,8 @@ function Composer({
               <label key={g.id} className="check">
                 <input
                   type="checkbox"
-                  checked={selected?.has(g.id) ?? false}
-                  onChange={(e) => {
-                    const next = new Set(selected ?? []);
-                    if (e.target.checked) next.add(g.id);
-                    else next.delete(g.id);
-                    setSelected(next);
-                  }}
+                  checked={isSelected(g.id)}
+                  onChange={(e) => toggle(g.id, e.target.checked)}
                 />
                 <span>
                   {g.display_name}
@@ -315,7 +256,7 @@ function Composer({
           >
             Don't share this one
           </button>
-          <button className="btn btn-primary" disabled={!canShare} onClick={() => share.mutate()}>
+          <button className="btn btn-primary" disabled={!canShare} onClick={() => share.mutate(when)}>
             {share.isPending ? "Sharing…" : shareButtonLabel(chosen.length)}
           </button>
         </div>
@@ -406,35 +347,5 @@ function Delivery({
         />
       </details>
     </section>
-  );
-}
-
-/** The message as WhatsApp will show it: the table image (if any) with the
- * text as its caption, or just the text. */
-function Report({ text, imageUrl }: { text: string; imageUrl: string | null }) {
-  if (!imageUrl) return <Bubble text={text} />;
-  return (
-    <div className="bubble bubble-image">
-      <a href={imageUrl} target="_blank" rel="noreferrer" title="Open full size">
-        <img src={imageUrl} alt="Report table that will be sent" className="report-image" />
-      </a>
-      <Bubble text={text} bare />
-    </div>
-  );
-}
-
-function Bubble({ text, bare = false }: { text: string; bare?: boolean }) {
-  return (
-    <div className={bare ? "bubble-caption" : "bubble"} aria-label="WhatsApp message preview">
-      {text.split("\n").map((line, i) => (
-        <div key={i} className="bubble-line">
-          {line === ""
-            ? " "
-            : whatsappSegments(line).map((seg, j) =>
-                seg.bold ? <strong key={j}>{seg.text}</strong> : seg.italic ? <em key={j}>{seg.text}</em> : <span key={j}>{seg.text}</span>,
-              )}
-        </div>
-      ))}
-    </div>
   );
 }

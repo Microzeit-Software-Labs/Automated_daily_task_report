@@ -19,6 +19,8 @@ export type GroupCandidate = S["GroupCandidateOut"];
 export type GroupCreate = S["WhatsAppGroupCreateRequest"];
 export type WhatsAppStatus = S["WhatsAppStatusOut"];
 export type UiConfig = S["UiConfigOut"];
+export type Prompt = S["PromptOut"];
+export type LinkStatus = S["LinkStatusOut"];
 
 /** A failed request, carrying the API's stable error `code` when there is one. */
 export class ApiError extends Error {
@@ -112,6 +114,9 @@ export const api = {
     };
   },
   createManualReview: () => request<ApprovalRequest>("POST", "/approval-requests"),
+  prompt: () => request<Prompt>("GET", "/notifications/prompt"),
+  snooze: (id: string, minutes: number) =>
+    request<ApprovalRequest>("POST", `/approval-requests/${id}/snooze`, { minutes }),
   openReview: (id: string) => request<ApprovalRequest>("POST", `/approval-requests/${id}/open`),
   preview: async (id: string): Promise<Preview> => {
     const p = await request<S["PreviewResponse"]>("POST", `/approval-requests/${id}/preview`);
@@ -123,6 +128,11 @@ export const api = {
     }),
   retryRecipient: (recipientId: string) =>
     request<ShareRecipient>("POST", `/shares/recipients/${recipientId}/retry`),
+
+  link: () => request<LinkStatus>("GET", "/whatsapp/link"),
+  startLink: () => request<LinkStatus>("POST", "/whatsapp/link"),
+  cancelLink: () => request<LinkStatus>("DELETE", "/whatsapp/link"),
+  reconnect: () => request<void>("POST", "/whatsapp/reconnect"),
 
   groups: () => request<Group[]>("GET", "/whatsapp/groups"),
   resolveGroup: (name: string) =>

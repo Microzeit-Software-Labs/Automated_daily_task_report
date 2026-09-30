@@ -26,10 +26,11 @@ from interlock.adapters.persistence.whatsapp_group_repository import WhatsAppGro
 from interlock.config import Settings
 from interlock.domain.common.actor import Actor, ActorKind
 from interlock.domain.common.clock import Clock
+from interlock.domain.common.errors import ProviderUnavailableError
 from interlock.domain.ports.rendering import ReportImageRenderer
 from interlock.domain.ports.repositories import AuditSink, TaskRepository
 from interlock.domain.ports.sheets import SpreadsheetProvider
-from interlock.domain.ports.whatsapp import WhatsAppProvider
+from interlock.domain.ports.whatsapp import WhatsAppLinking, WhatsAppProvider
 from interlock.services.review_service import ReviewService
 from interlock.services.scheduler_service import SchedulerService
 from interlock.services.sharing_service import SharingService
@@ -47,6 +48,17 @@ def get_clock(request: Request) -> Clock:
 
 def get_whatsapp(request: Request) -> WhatsAppProvider:
     return request.app.state.whatsapp  # type: ignore[no-any-return]
+
+
+def get_linking(request: Request) -> WhatsAppLinking:
+    """The WhatsApp provider, if it can be linked from the UI. Providers that
+    can't (the official Cloud API, say) raise instead of offering a QR."""
+    provider = request.app.state.whatsapp
+    if not isinstance(provider, WhatsAppLinking):
+        raise ProviderUnavailableError(
+            f"The '{provider.name}' WhatsApp provider can't be linked from Interlock."
+        )
+    return provider
 
 
 def get_sheets(request: Request) -> SpreadsheetProvider:

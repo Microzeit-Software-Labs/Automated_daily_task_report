@@ -167,6 +167,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/approval-requests/{request_id}/snooze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Snooze Review
+         * @description Quiet the popup for this review, then ask again after ``minutes``.
+         */
+        post: operations["snooze_review_approval_requests__request_id__snooze_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/approval-requests/{request_id}/preview": {
         parameters: {
             query?: never;
@@ -300,6 +320,73 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/whatsapp/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Link Status */
+        get: operations["link_status_whatsapp_link_get"];
+        put?: never;
+        /**
+         * Start Link
+         * @description Start linking a phone (or start over, if an attempt is already running).
+         */
+        post: operations["start_link_whatsapp_link_post"];
+        /**
+         * Cancel Link
+         * @description Abandon the attempt. The current link is untouched.
+         */
+        delete: operations["cancel_link_whatsapp_link_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/whatsapp/link/qr.svg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Link Qr
+         * @description The current QR code. It changes about every 20 seconds; ``qr_version`` on
+         *     ``GET /whatsapp/link`` changes with it.
+         */
+        get: operations["link_qr_whatsapp_link_qr_svg_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/whatsapp/reconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconnect
+         * @description Reconnect a link that is still valid (dropped, or taken over by another
+         *     session). A logged-out link needs a new QR instead.
+         */
+        post: operations["reconnect_whatsapp_reconnect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/shares/recipients/{recipient_id}/retry": {
         parameters: {
             query?: never;
@@ -371,6 +458,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/notifications/prompt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current Prompt */
+        get: operations["current_prompt_notifications_prompt_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/ui": {
         parameters: {
             query?: never;
@@ -421,6 +525,8 @@ export interface components {
             approved_by_user_id: string | null;
             /** Approved At */
             approved_at: string | null;
+            /** Snoozed Until */
+            snoozed_until?: string | null;
         };
         /**
          * ApprovalState
@@ -470,6 +576,8 @@ export interface components {
             recipient_group_ids?: string[];
             /** Send At */
             send_at?: string | null;
+            /** Delay Minutes */
+            delay_minutes?: number | null;
             /** Template Id */
             template_id?: string | null;
             /** Template Source */
@@ -522,6 +630,31 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /**
+         * LinkStatusOut
+         * @description Progress of linking a phone. The QR itself is an image at
+         *     ``GET /whatsapp/link/qr.svg`` (``qr_version`` changes whenever it does, so
+         *     a page can cache-bust on it).
+         */
+        LinkStatusOut: {
+            state: components["schemas"]["PairingState"];
+            /** Detail */
+            detail: string;
+            /** Pairing Id */
+            pairing_id: string | null;
+            /** Has Qr */
+            has_qr: boolean;
+            /** Qr Version */
+            qr_version: string | null;
+            /** Agent Online */
+            agent_online: boolean;
+        };
+        /**
+         * PairingState
+         * @description One attempt to link a phone, as the UI sees it.
+         * @enum {string}
+         */
+        PairingState: "IDLE" | "STARTING" | "WAITING_FOR_SCAN" | "SCANNED" | "SUCCEEDED" | "EXPIRED" | "CANCELLED" | "FAILED";
         /** PreviewResponse */
         PreviewResponse: {
             /** Rendered Body */
@@ -539,6 +672,13 @@ export interface components {
          * @enum {string}
          */
         Priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT";
+        /**
+         * PromptOut
+         * @description ``prompt`` is the review the popup should ask about, or null.
+         */
+        PromptOut: {
+            prompt: components["schemas"]["ApprovalRequestOut"] | null;
+        };
         /**
          * RecipientState
          * @description One group, one job. The actual unit of delivery.
@@ -620,6 +760,14 @@ export interface components {
             error_code: string | null;
             /** Error Detail */
             error_detail: string;
+        };
+        /** SnoozeRequest */
+        SnoozeRequest: {
+            /**
+             * Minutes
+             * @default 30
+             */
+            minutes: number;
         };
         /** SyncConflictOut */
         SyncConflictOut: {
@@ -877,6 +1025,14 @@ export interface components {
             can_send: boolean;
             /** Detail */
             detail: string;
+            /** Reason */
+            reason?: string | null;
+            /** Account Jid */
+            account_jid?: string | null;
+            /** Account Number */
+            account_number?: string | null;
+            /** Account Name */
+            account_name?: string | null;
         };
     };
     responses: never;
@@ -1269,6 +1425,44 @@ export interface operations {
             };
         };
     };
+    snooze_review_approval_requests__request_id__snooze_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-actor-id"?: string | null;
+                "x-actor-name"?: string | null;
+            };
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SnoozeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     preview_review_approval_requests__request_id__preview_post: {
         parameters: {
             query?: never;
@@ -1519,6 +1713,104 @@ export interface operations {
             };
         };
     };
+    link_status_whatsapp_link_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkStatusOut"];
+                };
+            };
+        };
+    };
+    start_link_whatsapp_link_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkStatusOut"];
+                };
+            };
+        };
+    };
+    cancel_link_whatsapp_link_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkStatusOut"];
+                };
+            };
+        };
+    };
+    link_qr_whatsapp_link_qr_svg_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/svg+xml": unknown;
+                };
+            };
+        };
+    };
+    reconnect_whatsapp_reconnect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     retry_recipient_shares_recipients__recipient_id__retry_post: {
         parameters: {
             query?: never;
@@ -1646,6 +1938,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    current_prompt_notifications_prompt_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptOut"];
                 };
             };
         };

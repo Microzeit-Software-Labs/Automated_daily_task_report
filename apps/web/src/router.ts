@@ -5,19 +5,22 @@ import { useSyncExternalStore } from "react";
 export type Route =
   | { name: "dashboard" }
   | { name: "review"; id: string }
-  | { name: "groups" };
+  | { name: "groups" }
+  | { name: "settings" };
 
 export function parseRoute(hash: string): Route {
   const path = hash.replace(/^#/, "");
   const review = /^\/review\/([^/]+)$/.exec(path);
   if (review?.[1]) return { name: "review", id: decodeURIComponent(review[1]) };
   if (path === "/groups") return { name: "groups" };
+  if (path === "/settings") return { name: "settings" };
   return { name: "dashboard" };
 }
 
 export function href(route: Route): string {
   if (route.name === "review") return `#/review/${encodeURIComponent(route.id)}`;
   if (route.name === "groups") return "#/groups";
+  if (route.name === "settings") return "#/settings";
   return "#/";
 }
 

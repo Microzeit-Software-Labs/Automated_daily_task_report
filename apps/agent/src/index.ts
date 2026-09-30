@@ -1,25 +1,34 @@
-/** Entry point. Connects Postgres and Baileys, resets any command left
- * CLAIMED by this same process's previous crashed run (exactly one agent
- * is ever supposed to run -- see docs/whatsapp-agent-setup.md on
- * -MultipleInstances IgnoreNew), then loops: claim the oldest eligible
- * PENDING command and process it, woken either by a Postgres NOTIFY or a
- * fixed fallback poll, whichever comes first.
+/** Entry point. Takes the one-agent-per-database lock, resets any command left
+ * CLAIMED by this same process's previous crashed run, connects WhatsApp (if a
+ * phone is linked), then loops: claim the oldest eligible PENDING command and
+ * process it, woken either by a Postgres NOTIFY or a fixed fallback poll,
+ * whichever comes first.
+ *
+ * While WhatsApp is not connected the loop claims only link-management
+ * commands (link a phone, reconnect): it could not send a message or look up a
+ * group anyway, and claiming them would leave them stuck.
  */
 import "dotenv/config";
+import { join } from "node:path";
+import qrcodeTerminal from "qrcode-terminal";
 import { AgentDb } from "./db";
-import { BaileysAgent, AgentConnectionState } from "./baileys";
+import { BaileysAgent, openPairingSocket } from "./baileys";
 import { CircuitBreaker } from "./circuitBreaker";
 import { RateLimiter } from "./rateLimiter";
 import { processCommand } from "./commands";
 import { scheduleCanary } from "./canary";
+import { LinkController } from "./linkController";
+import { removeDirQuiet, SessionStore } from "./sessionFiles";
 import { logger } from "./logger";
 
-const AGENT_VERSION = "0.1.0";
+const AGENT_VERSION = "0.2.0";
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const POLL_INTERVAL_MS = 500;
 const CLAIM_MARGIN_SECONDS = 2;
 const WORKER_ID = `local-agent-${process.pid}`;
 const SHUTDOWN_GRACE_MS = 3_000;
+/** Distinct from a crash (1) so a supervisor can tell "already running" from "broke". */
+const ALREADY_RUNNING_EXIT_CODE = 3;
 
 async function main(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL;
@@ -31,28 +40,80 @@ async function main(): Promise<void> {
   }
 
   const db = new AgentDb(databaseUrl);
+
+  // Before anything that assumes it is the only agent. reset_stale_claims
+  // below would otherwise steal a live peer's in-flight work.
+  if (!(await db.acquireInstanceLock())) {
+    logger.error(
+      "agent.already_running -- another Interlock WhatsApp agent holds the database lock; exiting"
+    );
+    await db.close();
+    process.exit(ALREADY_RUNNING_EXIT_CODE);
+  }
   await db.resetStaleClaims();
+
+  // dist/src/ -> apps/agent/. Sessions must not live under dist/: a clean
+  // rebuild would silently wipe the pairing and force a new QR scan.
+  const agentDir = join(__dirname, "..", "..");
+  const sessions = new SessionStore(agentDir);
+  // Tidy up, best-effort (a folder Windows still has open is left for next time):
+  // the scratch folder the first version of linking used, and old session folders.
+  removeDirQuiet(join(agentDir, ".wa-session.pairing"));
+  const tidied = sessions.prune();
+  if (tidied.length > 0) {
+    logger.info({ tidied }, "agent.old_sessions_removed");
+  }
+  await db.updatePairing({ state: "IDLE", pairingId: null, qr: null, qrAt: null, detail: "" });
 
   const rateLimiter = new RateLimiter();
   const breaker = new CircuitBreaker();
 
-  const heartbeat = (state: AgentConnectionState, detail: string): void => {
+  const baileys = await BaileysAgent.connect({
+    db,
+    store: sessions,
+    onStateChange: (state, detail, reason, account) => {
+      logger.info({ state, reason, detail }, "agent.state");
+      db.upsertStatus({
+        state,
+        detail,
+        reason,
+        accountJid: account?.jid ?? null,
+        accountName: account?.name ?? null,
+        agentVersion: AGENT_VERSION,
+        lastSuccessfulSendAt: null,
+        lastCanaryAt: null,
+        lastCanaryOk: null,
+      }).catch((err: unknown) => logger.error({ err }, "status.upsert_failed"));
+    },
+  });
+
+  const link = new LinkController({
+    store: db,
+    adopter: baileys,
+    openSocket: openPairingSocket,
+    newSessionDir: () => sessions.newGenerationDir(),
+    onQr: (qr) => {
+      if (process.stdout.isTTY) {
+        qrcodeTerminal.generate(qr, { small: true });
+      }
+    },
+    onError: (err, what) => logger.error({ err }, `link.${what}_failed`),
+  });
+
+  const heartbeatTimer = setInterval(() => {
+    const account = baileys.account();
     db.upsertStatus({
-      state,
-      detail,
+      state: baileys.currentState(),
+      detail: "heartbeat",
+      reason: baileys.currentReason(),
+      accountJid: account?.jid ?? null,
+      accountName: account?.name ?? null,
       agentVersion: AGENT_VERSION,
       lastSuccessfulSendAt: null,
       lastCanaryAt: null,
       lastCanaryOk: null,
     }).catch((err: unknown) => logger.error({ err }, "status.upsert_failed"));
-  };
-
-  const baileys = await BaileysAgent.connect({ db, onStateChange: heartbeat });
-
-  const heartbeatTimer = setInterval(
-    () => heartbeat(baileys.currentState(), "heartbeat"),
-    HEARTBEAT_INTERVAL_MS
-  );
+  }, HEARTBEAT_INTERVAL_MS);
   const stopCanary = scheduleCanary({ db, baileys });
 
   let wake: (() => void) | null = null;
@@ -83,6 +144,7 @@ async function main(): Promise<void> {
     // Backstop: whatever hangs, the process still exits.
     setTimeout(() => process.exit(code), SHUTDOWN_GRACE_MS).unref();
     try {
+      link.shutdown();
       baileys.close();
     } catch (err: unknown) {
       logger.error({ err }, "baileys.close_failed");
@@ -93,7 +155,9 @@ async function main(): Promise<void> {
   }
 
   while (!stopping) {
-    const claimed = await db.claimNext(WORKER_ID, CLAIM_MARGIN_SECONDS).catch((err: unknown) => {
+    const connected = baileys.currentState() === "CONNECTED";
+    const claim = connected ? db.claimNext.bind(db) : db.claimNextControl.bind(db);
+    const claimed = await claim(WORKER_ID, CLAIM_MARGIN_SECONDS).catch((err: unknown) => {
       logger.error({ err }, "claim_next.failed");
       return null;
     });
@@ -102,7 +166,7 @@ async function main(): Promise<void> {
       break;
     }
     if (claimed) {
-      await processCommand(claimed, { db, baileys, rateLimiter, breaker }).catch(
+      await processCommand(claimed, { db, baileys, rateLimiter, breaker, link }).catch(
         (err: unknown) => logger.error({ err, commandId: claimed.id }, "command.crashed")
       );
       continue;

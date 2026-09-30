@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { AgentDb, ClaimedCommand } from "./db";
 import { BaileysAgent, GroupInfo } from "./baileys";
 import { CircuitBreaker } from "./circuitBreaker";
+import type { LinkController } from "./linkController";
 import { RateLimiter } from "./rateLimiter";
 import { logger } from "./logger";
 
@@ -14,6 +15,7 @@ export interface CommandContext {
   baileys: BaileysAgent;
   rateLimiter: RateLimiter;
   breaker: CircuitBreaker;
+  link: LinkController;
 }
 
 export interface RankedCandidate {
@@ -64,6 +66,17 @@ export async function processCommand(cmd: ClaimedCommand, ctx: CommandContext): 
     await processResolveGroup(cmd, ctx);
   } else if (cmd.op === "send_text" || cmd.op === "test_send") {
     await processSend(cmd, ctx);
+  } else if (cmd.op === "link_start") {
+    // Returns as soon as the attempt has begun; progress and the QR reach the
+    // UI through the status row, so the claim loop is never held up.
+    await ctx.link.start(cmd.id);
+    await ctx.db.complete(cmd.id, { started: true });
+  } else if (cmd.op === "link_cancel") {
+    await ctx.link.cancel();
+    await ctx.db.complete(cmd.id, { cancelled: true });
+  } else if (cmd.op === "reconnect") {
+    const outcome = await ctx.baileys.reconnectNow();
+    await ctx.db.complete(cmd.id, { ok: outcome !== "not_linked", outcome });
   } else {
     // Unreachable given the DB's own CHECK constraint on op, but the
     // outbox is a shared contract -- a future op this build does not know
@@ -83,12 +96,15 @@ async function processResolveGroup(cmd: ClaimedCommand, ctx: CommandContext): Pr
     const groups = await ctx.baileys.fetchGroups();
     await ctx.db.complete(cmd.id, { candidates: rankGroups(name, groups) });
   } catch (err) {
-    // Left CLAIMED, not completed as a failure: Python's own poll timeout
-    // covers this (see local_agent.py), and the group set is just as
-    // reachable on the very next attempt -- there is no reason to fabricate
-    // a terminal PERMANENT verdict from what is very likely a transient
-    // socket problem.
+    // Answer with the reason instead of going quiet, so the UI can say "WhatsApp
+    // isn't connected" right away rather than after a 20-second timeout. This is
+    // only a lookup -- nothing is lost by completing it as an error, and the
+    // user simply asks again.
     logger.error({ err, commandId: cmd.id }, "resolve_group.failed");
+    await ctx.db.complete(cmd.id, {
+      error: "NOT_AVAILABLE",
+      detail: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 

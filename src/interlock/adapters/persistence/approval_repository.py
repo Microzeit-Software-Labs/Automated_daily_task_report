@@ -152,6 +152,20 @@ class ApprovalRepository:
         self._session.flush()
         return _to_entity(row)
 
+    def snooze(
+        self, request_id: str, *, until: dt.datetime, now: dt.datetime
+    ) -> ApprovalRequest:
+        """Silence the popup for this review until ``until``. Changes no state."""
+        row = self._session.get(ApprovalRequestRow, request_id)
+        if row is None:
+            raise NotFoundError(
+                f"Approval request {request_id} does not exist.", request_id=request_id
+            )
+        row.snoozed_until = until
+        row.updated_at = now
+        self._session.flush()
+        return _to_entity(row)
+
     def last_successful_share_at(self, before: dt.datetime) -> dt.datetime | None:
         """When the most recent SENT share job's snapshot was frozen, if any.
 
@@ -181,4 +195,5 @@ def _to_entity(row: ApprovalRequestRow) -> ApprovalRequest:
         dataset_version_at_open=row.dataset_version_at_open,
         approved_by_user_id=row.approved_by_user_id,
         approved_at=row.approved_at,
+        snoozed_until=row.snoozed_until,
     )

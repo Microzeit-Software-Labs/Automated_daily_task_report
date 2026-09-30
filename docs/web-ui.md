@@ -40,6 +40,23 @@ Or by hand:
 09:00 or 17:00 report opens, but only while its tab is open. There is no push
 delivery yet (HANDOVER §8).
 
+## The 09:00 / 17:00 popup
+
+When the worker opens a morning or evening report, a popup asks what to do with it:
+
+- **Send now** sends it right away.
+- **Send after 5 minutes** and **Custom time…** (any date and time within 7 days) schedule it. The worker sends it at that time, even if you close the browser.
+- **Snooze 30 minutes** (or the ×) hides the popup and brings it back 30 minutes later.
+- **Skip this report** closes the report without sharing it; **Open full report** goes to the full page.
+
+The popup appears within about a minute of the alert time, on whichever Interlock tab is open. It never shows on that report's own page, and if the tab is in the background you also get a desktop notification, once you've turned desktop alerts on from the Reports page.
+
+It's driven by the report waiting in the database, not by a timer in the page, so a restart or refresh can't lose it or show it twice, and a snooze survives a restart.
+
+If WhatsApp is disconnected when a report comes due, the report waits (no failed attempts) and goes out when WhatsApp reconnects, as long as it's still the same day and within the grace window. Otherwise it is held back for you, with the reason shown.
+
+A custom time on a later day sends the report as it was when you approved it, so it carries that day's data, not the later day's.
+
 ## What protects you
 
 - **The text you read is the text that's sent.** The preview carries a

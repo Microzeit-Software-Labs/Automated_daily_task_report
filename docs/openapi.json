@@ -772,6 +772,91 @@
         }
       }
     },
+    "/approval-requests/{request_id}/snooze": {
+      "post": {
+        "tags": [
+          "approvals"
+        ],
+        "summary": "Snooze Review",
+        "description": "Quiet the popup for this review, then ask again after ``minutes``.",
+        "operationId": "snooze_review_approval_requests__request_id__snooze_post",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "x-actor-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Actor-Id"
+            }
+          },
+          {
+            "name": "x-actor-name",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Actor-Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SnoozeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRequestOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/approval-requests/{request_id}/preview": {
       "post": {
         "tags": [
@@ -1142,6 +1227,100 @@
         }
       }
     },
+    "/whatsapp/link": {
+      "get": {
+        "tags": [
+          "whatsapp"
+        ],
+        "summary": "Link Status",
+        "operationId": "link_status_whatsapp_link_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkStatusOut"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "whatsapp"
+        ],
+        "summary": "Start Link",
+        "description": "Start linking a phone (or start over, if an attempt is already running).",
+        "operationId": "start_link_whatsapp_link_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkStatusOut"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "whatsapp"
+        ],
+        "summary": "Cancel Link",
+        "description": "Abandon the attempt. The current link is untouched.",
+        "operationId": "cancel_link_whatsapp_link_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkStatusOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/whatsapp/link/qr.svg": {
+      "get": {
+        "tags": [
+          "whatsapp"
+        ],
+        "summary": "Link Qr",
+        "description": "The current QR code. It changes about every 20 seconds; ``qr_version`` on\n``GET /whatsapp/link`` changes with it.",
+        "operationId": "link_qr_whatsapp_link_qr_svg_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "image/svg+xml": {}
+            }
+          }
+        }
+      }
+    },
+    "/whatsapp/reconnect": {
+      "post": {
+        "tags": [
+          "whatsapp"
+        ],
+        "summary": "Reconnect",
+        "description": "Reconnect a link that is still valid (dropped, or taken over by another\nsession). A logged-out link needs a new QR instead.",
+        "operationId": "reconnect_whatsapp_reconnect_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        }
+      }
+    },
     "/shares/recipients/{recipient_id}/retry": {
       "post": {
         "tags": [
@@ -1354,6 +1533,27 @@
         }
       }
     },
+    "/notifications/prompt": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Current Prompt",
+        "operationId": "current_prompt_notifications_prompt_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/config/ui": {
       "get": {
         "tags": [
@@ -1447,6 +1647,18 @@
               }
             ],
             "title": "Approved At"
+          },
+          "snoozed_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snoozed Until"
           }
         },
         "type": "object",
@@ -1596,6 +1808,19 @@
               }
             ],
             "title": "Send At"
+          },
+          "delay_minutes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1440.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delay Minutes"
           },
           "template_id": {
             "anyOf": [
@@ -1773,6 +1998,73 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "LinkStatusOut": {
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/PairingState"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "pairing_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pairing Id"
+          },
+          "has_qr": {
+            "type": "boolean",
+            "title": "Has Qr"
+          },
+          "qr_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qr Version"
+          },
+          "agent_online": {
+            "type": "boolean",
+            "title": "Agent Online"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state",
+          "detail",
+          "pairing_id",
+          "has_qr",
+          "qr_version",
+          "agent_online"
+        ],
+        "title": "LinkStatusOut",
+        "description": "Progress of linking a phone. The QR itself is an image at\n``GET /whatsapp/link/qr.svg`` (``qr_version`` changes whenever it does, so\na page can cache-bust on it)."
+      },
+      "PairingState": {
+        "type": "string",
+        "enum": [
+          "IDLE",
+          "STARTING",
+          "WAITING_FOR_SCAN",
+          "SCANNED",
+          "SUCCEEDED",
+          "EXPIRED",
+          "CANCELLED",
+          "FAILED"
+        ],
+        "title": "PairingState",
+        "description": "One attempt to link a phone, as the UI sees it."
+      },
       "PreviewResponse": {
         "properties": {
           "rendered_body": {
@@ -1805,6 +2097,26 @@
           "URGENT"
         ],
         "title": "Priority"
+      },
+      "PromptOut": {
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApprovalRequestOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt"
+        ],
+        "title": "PromptOut",
+        "description": "``prompt`` is the review the popup should ask about, or null."
       },
       "RecipientState": {
         "type": "string",
@@ -2048,6 +2360,20 @@
           "error_detail"
         ],
         "title": "ShareRecipientOut"
+      },
+      "SnoozeRequest": {
+        "properties": {
+          "minutes": {
+            "type": "integer",
+            "maximum": 240.0,
+            "minimum": 1.0,
+            "title": "Minutes",
+            "default": 30
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SnoozeRequest"
       },
       "SyncConflictOut": {
         "properties": {
@@ -2761,6 +3087,50 @@
           "detail": {
             "type": "string",
             "title": "Detail"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "account_jid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Jid"
+          },
+          "account_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Number"
+          },
+          "account_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Name"
           }
         },
         "type": "object",

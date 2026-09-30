@@ -33,6 +33,25 @@ WHERE id = (
 )
 RETURNING id, op, payload, client_message_id, wa_message_id, created_at, expires_at;
 
+-- name: claim_next_control
+-- Same as claim_next, but only the commands that manage the WhatsApp link
+-- itself (linking a phone, reconnecting). Used while the agent is not
+-- connected: it cannot send a message or look up a group then, so it must not
+-- claim those and leave them stuck CLAIMED -- they simply wait (and expire)
+-- as PENDING until the link is back.
+UPDATE whatsapp_agent_commands
+SET status = 'CLAIMED', claimed_at = now(), claimed_by = :claimed_by
+WHERE id = (
+    SELECT id FROM whatsapp_agent_commands
+    WHERE status = 'PENDING'
+      AND op IN ('link_start', 'link_cancel', 'reconnect')
+      AND expires_at > now() + (:margin_seconds || ' seconds')::interval
+    ORDER BY created_at
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id, op, payload, client_message_id, wa_message_id, created_at, expires_at;
+
 -- name: complete
 -- Terminal outcomes only: a send the WhatsApp server acknowledged, or a
 -- failure that retrying cannot fix. :result is a JSON-encoded SendOutcome
@@ -84,20 +103,46 @@ WHERE id = :id AND status = 'CLAIMED';
 -- fixed timer regardless of activity. NULL for last_successful_send_at /
 -- last_canary_at / last_canary_ok means "no news on this front" -- the
 -- COALESCE keeps whatever was last recorded rather than blanking it on a
--- heartbeat that has nothing new to report.
+-- heartbeat that has nothing new to report. The same goes for the linked
+-- account, so "last connected as ..." survives a disconnect. status_reason is
+-- the opposite: it is overwritten every time (NULL while healthy), because a
+-- stale reason would keep a red banner up after the problem is gone.
 INSERT INTO whatsapp_agent_status
-    (id, state, detail, agent_version, last_successful_send_at,
-     last_canary_at, last_canary_ok, updated_at)
+    (id, state, detail, status_reason, agent_version, account_jid, account_name,
+     last_successful_send_at, last_canary_at, last_canary_ok, updated_at)
 VALUES
-    ('agent', :state, :detail, :agent_version, :last_successful_send_at,
-     :last_canary_at, :last_canary_ok, now())
+    ('agent', :state, :detail, :status_reason, :agent_version, :account_jid, :account_name,
+     :last_successful_send_at, :last_canary_at, :last_canary_ok, now())
 ON CONFLICT (id) DO UPDATE SET
     state = EXCLUDED.state,
     detail = EXCLUDED.detail,
+    status_reason = EXCLUDED.status_reason,
     agent_version = EXCLUDED.agent_version,
+    account_jid = COALESCE(EXCLUDED.account_jid, whatsapp_agent_status.account_jid),
+    account_name = COALESCE(EXCLUDED.account_name, whatsapp_agent_status.account_name),
     last_successful_send_at = COALESCE(
         EXCLUDED.last_successful_send_at, whatsapp_agent_status.last_successful_send_at
     ),
     last_canary_at = COALESCE(EXCLUDED.last_canary_at, whatsapp_agent_status.last_canary_at),
     last_canary_ok = COALESCE(EXCLUDED.last_canary_ok, whatsapp_agent_status.last_canary_ok),
+    updated_at = now();
+
+-- name: update_pairing
+-- Progress of the one phone-linking attempt that may be running, which the UI
+-- polls. It is an upsert because the very first thing an agent on a brand new
+-- install does may be to start linking, before any heartbeat has created the
+-- status row. The placeholder connection state only ever applies to that
+-- first insert; an existing row keeps its real state.
+INSERT INTO whatsapp_agent_status
+    (id, state, detail, pairing_state, pairing_id, pairing_qr, pairing_qr_at,
+     pairing_detail, updated_at)
+VALUES
+    ('agent', 'CONNECTING', '', :pairing_state, :pairing_id, :pairing_qr, :pairing_qr_at,
+     :pairing_detail, now())
+ON CONFLICT (id) DO UPDATE SET
+    pairing_state = EXCLUDED.pairing_state,
+    pairing_id = EXCLUDED.pairing_id,
+    pairing_qr = EXCLUDED.pairing_qr,
+    pairing_qr_at = EXCLUDED.pairing_qr_at,
+    pairing_detail = EXCLUDED.pairing_detail,
     updated_at = now();

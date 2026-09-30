@@ -16,7 +16,16 @@ from interlock.adapters.sheets.factory import build_sheets_provider
 from interlock.adapters.whatsapp.factory import build_whatsapp_provider
 from interlock.api.errors import register_error_handlers
 from interlock.api.idempotency import IdempotencyMiddleware
-from interlock.api.routers import approvals, health, shares, sync, tasks, ui, whatsapp
+from interlock.api.routers import (
+    approvals,
+    health,
+    notifications,
+    shares,
+    sync,
+    tasks,
+    ui,
+    whatsapp,
+)
 from interlock.config import ReportFormat, Settings, get_settings
 from interlock.domain.common.clock import Clock, SystemClock
 from interlock.domain.ports.sheets import SpreadsheetProvider
@@ -76,6 +85,7 @@ def create_app(
     app.include_router(whatsapp.router)
     app.include_router(shares.router)
     app.include_router(sync.router)
+    app.include_router(notifications.router)
     app.include_router(ui.router)
     ui.mount_web_app(app)
 

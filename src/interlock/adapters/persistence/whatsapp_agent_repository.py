@@ -45,6 +45,14 @@ class AgentStatus:
     last_canary_at: dt.datetime | None
     last_canary_ok: bool | None
     updated_at: dt.datetime
+    status_reason: str | None = None
+    account_jid: str | None = None
+    account_name: str | None = None
+    pairing_state: str = "IDLE"
+    pairing_id: str | None = None
+    pairing_qr: str | None = None
+    pairing_qr_at: dt.datetime | None = None
+    pairing_detail: str = ""
 
 
 class WhatsAppAgentRepository:
@@ -148,4 +156,12 @@ def _status_to_record(row: WhatsAppAgentStatusRow) -> AgentStatus:
         last_canary_at=row.last_canary_at,
         last_canary_ok=row.last_canary_ok,
         updated_at=row.updated_at,
+        status_reason=row.status_reason,
+        account_jid=row.account_jid,
+        account_name=row.account_name,
+        pairing_state=row.pairing_state,
+        pairing_id=row.pairing_id,
+        pairing_qr=row.pairing_qr,
+        pairing_qr_at=row.pairing_qr_at,
+        pairing_detail=row.pairing_detail,
     )

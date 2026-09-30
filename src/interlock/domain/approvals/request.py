@@ -39,8 +39,13 @@ class ApprovalRequest:
     dataset_version_at_open: str | None = None
     approved_by_user_id: str | None = None
     approved_at: dt.datetime | None = None
+    snoozed_until: dt.datetime | None = None
+    """"Remind me later": the popup stays quiet until this passes. Not part of
+    the approval state machine -- snoozing changes no state."""
 
     def __post_init__(self) -> None:
         ensure_aware(self.scheduled_for, field="approval_request.scheduled_for")
         ensure_aware(self.created_at, field="approval_request.created_at")
         ensure_aware(self.updated_at, field="approval_request.updated_at")
+        if self.snoozed_until is not None:
+            ensure_aware(self.snoozed_until, field="approval_request.snoozed_until")

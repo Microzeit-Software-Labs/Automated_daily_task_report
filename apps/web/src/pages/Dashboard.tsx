@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import { api, type ApprovalRequest, type UiConfig } from "../api";
 import { formatDate, formatTime, isOpen, KIND_LABELS, localDateIn } from "../logic";
@@ -17,7 +17,6 @@ export function Dashboard({ config }: { config: UiConfig }) {
     mutationFn: api.createManualReview,
     onSuccess: (review) => navigate({ name: "review", id: review.id }),
   });
-  useNewReviewAlerts(reviews.data, today, config);
 
   const all = reviews.data ?? [];
   const todays = all.filter((r) => r.local_date === today);
@@ -97,43 +96,12 @@ function ReviewList({ reviews, tz, showDate = false }: { reviews: ApprovalReques
   );
 }
 
-/** A desktop notification when a new review opens -- only while this tab is
- * open (there is no push delivery yet, see HANDOVER §8). Reviews that already
- * existed when the page loaded never alert. */
-function useNewReviewAlerts(reviews: ApprovalRequest[] | undefined, today: string, config: UiConfig) {
-  const seen = useRef<Set<string> | null>(null);
-  useEffect(() => {
-    if (!reviews) return;
-    if (seen.current === null) {
-      seen.current = new Set(reviews.map((r) => r.id));
-      return;
-    }
-    for (const r of reviews) {
-      if (seen.current.has(r.id)) continue;
-      seen.current.add(r.id);
-      if (r.local_date === today && isOpen(r.state) && r.kind !== "MANUAL") notify(r, config);
-    }
-  }, [reviews, today, config]);
-}
-
-function notify(review: ApprovalRequest, config: UiConfig) {
-  if (!("Notification" in window) || Notification.permission !== "granted") return;
-  const n = new Notification(`${KIND_LABELS[review.kind]} is ready`, {
-    body: `Review and approve it before it goes to WhatsApp (${formatTime(review.scheduled_for, config.timezone)}).`,
-    tag: review.id,
-  });
-  n.onclick = () => {
-    window.focus();
-    navigate({ name: "review", id: review.id });
-  };
-}
-
 function AlertsToggle() {
   const supported = "Notification" in window;
   const [permission, setPermission] = useState(supported ? Notification.permission : "denied");
   if (!supported || permission === "granted") {
     return permission === "granted" ? (
-      <p className="muted small">Desktop alerts are on while this tab stays open.</p>
+      <p className="muted small">Desktop alerts are on while this tab is open in the background.</p>
     ) : null;
   }
   if (permission === "denied") {
@@ -144,7 +112,7 @@ function AlertsToggle() {
       <button className="link" onClick={() => void Notification.requestPermission().then(setPermission)}>
         Turn on desktop alerts
       </button>{" "}
-      to hear about new reports while this tab is open.
+      to hear about new reports when this tab is in the background.
     </p>
   );
 }

@@ -16,11 +16,16 @@ from zoneinfo import ZoneInfo
 
 from interlock.adapters.persistence.approval_repository import ApprovalRepository
 from interlock.domain.approvals.machine import transition
+from interlock.domain.approvals.prompt import MAX_SNOOZE_MINUTES, OPEN_STATES, pick_prompt
 from interlock.domain.approvals.request import ApprovalKind, ApprovalRequest
 from interlock.domain.approvals.states import ApprovalState
 from interlock.domain.common.actor import Actor, system_actor
 from interlock.domain.common.clock import local_date
-from interlock.domain.common.errors import NotFoundError
+from interlock.domain.common.errors import (
+    IllegalTransitionError,
+    NotFoundError,
+    ValidationFailedError,
+)
 from interlock.domain.ports.repositories import AuditSink, TaskRepository
 from interlock.domain.sharing.snapshot import format_dataset_version
 from interlock.domain.tasks.entities import Task
@@ -100,6 +105,41 @@ class ReviewService:
             after={"kind": ApprovalKind.MANUAL.value, "local_date": day.isoformat()},
         )
         return request
+
+    def active_prompt(self, *, now: dt.datetime) -> ApprovalRequest | None:
+        """The review the popup should be asking about right now, if any."""
+        todays = self._approvals.list_recent(limit=20, local_date=local_date(now, self._tz))
+        return pick_prompt(todays, now=now, tz=self._tz)
+
+    def snooze(
+        self, request_id: str, *, minutes: int, actor: Actor, now: dt.datetime
+    ) -> ApprovalRequest:
+        """"Remind me again in N minutes". Only an open review can be snoozed
+        (there is nothing left to be reminded about otherwise), and snoozing
+        again simply moves the time."""
+        if not 1 <= minutes <= MAX_SNOOZE_MINUTES:
+            raise ValidationFailedError(
+                f"Snooze must be between 1 and {MAX_SNOOZE_MINUTES} minutes.", minutes=minutes
+            )
+        request = self._require(request_id)
+        if request.state not in OPEN_STATES:
+            raise IllegalTransitionError(
+                f"Review {request.display_id} is {request.state.value}; "
+                "there is nothing left to snooze.",
+                request_id=request.id,
+                state=request.state.value,
+            )
+        until = now + dt.timedelta(minutes=minutes)
+        self._audit.record(
+            action="REVIEW_SNOOZED",
+            entity_type="approval_request",
+            entity_id=request.id,
+            actor=str(actor),
+            actor_kind=actor.kind.value,
+            at=now,
+            after={"until": until.isoformat(), "minutes": minutes},
+        )
+        return self._approvals.snooze(request.id, until=until, now=now)
 
     def list_recent(
         self, *, limit: int = 20, day: dt.date | None = None

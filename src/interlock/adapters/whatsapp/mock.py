@@ -18,11 +18,15 @@ import datetime as dt
 from collections.abc import Sequence
 
 from interlock.domain.common.clock import Clock
+from interlock.domain.common.errors import ProviderUnavailableError
+from interlock.domain.common.ids import new_id
 from interlock.domain.ports.whatsapp import (
     ConnectionState,
     DeliveryAck,
     ErrorClass,
     GroupCandidate,
+    LinkStatus,
+    PairingState,
     ProviderStatus,
     SendOutcome,
 )
@@ -71,8 +75,54 @@ class MockWhatsAppProvider:
         self._sent: list[SentMessage] = []
         self._last_success: dt.datetime | None = None
         self._send_attempts = 0
+        self._reason: str | None = None
+        self._account_jid: str | None = None
+        self._account_name: str | None = None
+        self._link = LinkStatus(state=PairingState.IDLE)
+        self._qr_counter = 0
+        self._agent_online = True
 
     # -- test controls ------------------------------------------------------
+
+    def given_link_problem(self, reason: str) -> None:
+        """Make the link look unusable for ``reason`` (NOT_LINKED, LOGGED_OUT,
+        SESSION_INVALID, REPLACED, FORBIDDEN), as the real agent reports it."""
+        self._state = (
+            ConnectionState.UNAVAILABLE
+            if reason in {"REPLACED", "FORBIDDEN"}
+            else ConnectionState.LOGIN_REQUIRED
+        )
+        self._reason = reason
+
+    def given_agent_offline(self) -> None:
+        """The WhatsApp service itself isn't running: nothing can be linked."""
+        self._agent_online = False
+        self._state = ConnectionState.UNAVAILABLE
+        self._reason = "AGENT_OFFLINE"
+
+    def complete_link(
+        self, jid: str = "919999999999:1@s.whatsapp.net", name: str = "Test phone"
+    ) -> None:
+        """Play the phone scanning the QR: the attempt succeeds and the new
+        account becomes the connected one."""
+        self._link = dataclasses.replace(
+            self._link, state=PairingState.SUCCEEDED, qr=None, detail=f"Linked {jid}."
+        )
+        self._state = ConnectionState.CONNECTED
+        self._reason = None
+        self._account_jid, self._account_name = jid, name
+
+    def expire_link(self) -> None:
+        self._link = dataclasses.replace(
+            self._link, state=PairingState.EXPIRED, qr=None, detail="The QR code expired."
+        )
+
+    def advance_qr(self) -> None:
+        """WhatsApp rotates the QR every ~20 s."""
+        self._qr_counter += 1
+        self._link = dataclasses.replace(
+            self._link, qr=f"mock-qr-{self._qr_counter}", qr_at=self._clock.now()
+        )
 
     def given_group(
         self, display_name: str, external_jid: str, *, members: int | None = None
@@ -139,7 +189,50 @@ class MockWhatsAppProvider:
             provider=self.name,
             last_successful_send_at=self._last_success,
             detail="in-memory test provider",
+            reason=self._reason,
+            account_jid=self._account_jid,
+            account_name=self._account_name,
         )
+
+    # -- linking (WhatsAppLinking) ----------------------------------------------
+
+    def start_link(self) -> LinkStatus:
+        self._require_agent_online()
+        self._qr_counter += 1
+        self._link = LinkStatus(
+            state=PairingState.WAITING_FOR_SCAN,
+            detail="Scan the code with WhatsApp.",
+            pairing_id=new_id(),
+            qr=f"mock-qr-{self._qr_counter}",
+            qr_at=self._clock.now(),
+        )
+        return self._link
+
+    def cancel_link(self) -> LinkStatus:
+        if self._link.state.in_progress:
+            self._link = dataclasses.replace(
+                self._link, state=PairingState.CANCELLED, qr=None, detail="Linking was cancelled."
+            )
+        return self._link
+
+    def link_status(self) -> LinkStatus:
+        return dataclasses.replace(self._link, agent_online=self._agent_online)
+
+    def _require_agent_online(self) -> None:
+        if not self._agent_online:
+            raise ProviderUnavailableError(
+                "Interlock's WhatsApp service isn't running, so there is nothing to "
+                "link yet. Start Interlock and try again."
+            )
+
+    def reconnect(self) -> None:
+        self._require_agent_online()
+        if self._reason == "NOT_LINKED":
+            raise ProviderUnavailableError(
+                "WhatsApp isn't linked to a phone yet. Link one with a QR code instead."
+            )
+        self._state = ConnectionState.CONNECTED
+        self._reason = None
 
     def resolve_group(self, name: str) -> Sequence[GroupCandidate]:
         """Match on name, returning every plausible candidate.
@@ -165,9 +258,7 @@ class MockWhatsAppProvider:
                 continue
             matches.append(dataclasses.replace(group, confidence=confidence))
 
-        return tuple(
-            sorted(matches, key=lambda c: (-c.confidence, c.display_name))
-        )
+        return tuple(sorted(matches, key=lambda c: (-c.confidence, c.display_name)))
 
     def send_text(
         self,

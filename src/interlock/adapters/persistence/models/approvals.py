@@ -40,6 +40,7 @@ class ApprovalRequestRow(Base):
     kind: Mapped[str] = mapped_column(String(10), nullable=False)
     local_date: Mapped[dt.date] = mapped_column(nullable=False)
     scheduled_for: Mapped[dt.datetime] = mapped_column(TIMESTAMPTZ, nullable=False)
+    snoozed_until: Mapped[dt.datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
     state: Mapped[str] = mapped_column(String(20), nullable=False)
     opened_at: Mapped[dt.datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
     dataset_version_at_open: Mapped[str | None] = mapped_column(String(40), nullable=True)

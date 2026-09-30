@@ -53,20 +53,39 @@ or `audit_logs`. This role is the whole trust boundary between the agent process
 everything else — see "How it works" below for why there's no signed-command protocol on
 top of it. Writes `apps\agent\.env` (gitignored); never touches the project root `.env`.
 
-## 3. Pair the device (one time)
+## 3. Link a phone (one time, and whenever it needs relinking)
 
-```powershell
-cd apps\agent
-npm start
-```
+Start Interlock (`.\scripts\start-interlock.ps1`), open the page it shows, and use the
+banner's **Link WhatsApp** button (or **Settings → WhatsApp**). A QR code appears in a
+dialog. On the phone: **WhatsApp → Settings → Linked Devices → Link a Device**, and scan it.
+The dialog then says *WhatsApp connected as +91…* and the banner goes away.
 
-A QR code prints in the terminal. On the phone that will run the agent: **WhatsApp →
-Linked Devices → Link a Device**, and scan it. Once linked, session state is saved to
-`apps\agent\.wa-session\` (gitignored) and pairing persists across restarts — you do this
-once, not every time you start the agent.
+The agent never shows a QR code on its own. With no phone linked it simply waits, in the
+state `LOGIN_REQUIRED` / `NOT_LINKED`, until someone links one from the page. Session
+state is saved under `apps\agent\` (`.wa-session\` for the original link, `.wa-sessions\` for phones linked from the page; all gitignored) and persists across restarts.
 
-Confirm the log line `agent.connected`, then stop it (Ctrl+C) — steady-state running is
-step 6.
+**What the page does when things go wrong** (you never need to touch the server):
+
+| What happened | What you see | What to do |
+|---|---|---|
+| Brief network loss | Nothing, or an amber "connecting" pill | Nothing: it reconnects by itself (2 s, 4 s ... up to 60 s between tries) |
+| Logged out from the phone (Linked Devices), or the saved session is no longer valid | Red banner **WhatsApp disconnected** with **Reconnect WhatsApp** | Click it and scan the QR. The dead session's folder is left alone on disk and tidied away later |
+| Another session took over the link | Amber banner with **Reconnect here** | Click it. If it keeps happening, link again |
+| WhatsApp refused the account | Red banner | Check WhatsApp on the phone, or link a different phone |
+| The WhatsApp service itself stopped | Amber banner "service isn't running" | Start Interlock again |
+
+**Changing to a different phone:** Settings → WhatsApp → **Link a different phone**. The
+current phone keeps working, and reports keep sending, while the QR is on screen. Only once the
+new phone has fully linked is it switched in, and the old phone is then logged out. Cancelling,
+or letting the code expire, changes nothing. Pinned groups are pinned by group id, so **the new
+number must be a member of your groups**.
+
+While WhatsApp is disconnected, reports you approve wait (they don't fail or burn retries) and go
+out after you reconnect, as long as it is still the same day and within the grace window;
+otherwise they are held back for you with the reason shown.
+
+Only one agent may run against a database: a second copy exits immediately ("another agent
+holds the database lock", exit code 3) instead of fighting the first over the same session.
 
 ## 4. Turn it on in Interlock
 
@@ -82,7 +101,8 @@ message pointing back here — that's deliberate, not a bug.
 
 ## 5. Pin your real groups
 
-There's no frontend yet, so use the API directly (`http://127.0.0.1:8000/docs` or `curl`):
+In the page: **Groups → Add a group**, type the group's name, and pick the exact match. (Or use
+the API directly, `http://127.0.0.1:8000/docs`:)
 
 ```
 POST /whatsapp/groups/resolve   {"name": "SI Team"}
@@ -174,8 +194,9 @@ alongside real sends. To check sooner than a week:
 ## Things to know
 
 - **Recovering from a logout**: the agent does not auto-reconnect after
-  `LOGIN_REQUIRED` — repeat step 3. `.wa-session\` is local device state, not a backup of
-  anything; losing it means re-pairing, not data loss.
+  `LOGIN_REQUIRED` — repeat step 3. The session folders are local device state, not a backup
+  of anything; losing them means re-pairing, not data loss. Don't move or delete them by hand
+  while the agent is running.
 - **Sends are serialized through one process.** A job with several recipients dispatches
   one at a time, each waiting up to `WHATSAPP_AGENT_COMMAND_TIMEOUT_SECONDS` (default 20s)
   in the worst case. Fine at this tool's scale (a handful of groups); worth knowing if

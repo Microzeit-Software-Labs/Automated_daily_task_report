@@ -21,6 +21,7 @@ dependencies = [
     "google-api-python-client>=2.100",
     "google-auth>=2.23",
     "pillow>=11",
+    "segno>=1.6",
 ]
 
 [project.optional-dependencies]

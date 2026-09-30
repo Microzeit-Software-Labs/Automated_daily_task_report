@@ -25,7 +25,7 @@ from sqlalchemy import Connection, Engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
-from interlock.adapters.persistence.base import make_engine
+from interlock.adapters.persistence.base import make_engine, make_session_factory
 
 pytestmark = pytest.mark.integration
 
@@ -84,6 +84,26 @@ def migrated_engine() -> Iterator[Engine]:
 
     yield engine
     engine.dispose()
+
+
+@pytest.fixture
+def agent_session_factory(migrated_engine: Engine) -> Iterator[sessionmaker[Session]]:
+    """For the WhatsApp agent tests, which commit for real: the provider and
+    the FakeAgent use separate connections, so the rolled-back ``db_session``
+    (which nothing outside its own transaction can see) doesn't work.
+
+    Truncating only *before* the test is not enough -- a row left behind (most
+    consequentially the single-row whatsapp_agent_status) would collide with
+    whatever the next test, in any file, tries to insert. Truncate on both
+    sides."""
+
+    def _truncate() -> None:
+        with migrated_engine.begin() as conn:
+            conn.execute(text("TRUNCATE TABLE whatsapp_agent_commands, whatsapp_agent_status"))
+
+    _truncate()
+    yield make_session_factory(migrated_engine)
+    _truncate()
 
 
 @pytest.fixture

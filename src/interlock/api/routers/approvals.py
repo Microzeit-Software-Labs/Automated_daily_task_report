@@ -24,6 +24,7 @@ from interlock.api.schemas import (
     ShareJobOut,
     ShareOut,
     ShareRecipientOut,
+    SnoozeRequest,
 )
 from interlock.domain.common.actor import Actor
 from interlock.domain.common.errors import NotFoundError
@@ -111,6 +112,19 @@ def cancel_review(
     return ApprovalRequestOut.from_entity(request)
 
 
+@router.post("/{request_id}/snooze", response_model=ApprovalRequestOut)
+def snooze_review(
+    request_id: str,
+    payload: SnoozeRequest,
+    actor: Actor = Depends(deps.get_current_actor),
+    now: dt.datetime = Depends(deps.now_dep),
+    service: ReviewService = Depends(deps.get_review_service),
+) -> ApprovalRequestOut:
+    """Quiet the popup for this review, then ask again after ``minutes``."""
+    request = service.snooze(request_id, minutes=payload.minutes, actor=actor, now=now)
+    return ApprovalRequestOut.from_entity(request)
+
+
 @router.post("/{request_id}/preview", response_model=PreviewResponse)
 def preview_review(
     request_id: str,
@@ -166,7 +180,11 @@ def commit_review(
         now=now,
         task_updates=task_updates,
         recipient_group_ids=payload.recipient_group_ids,
-        send_at=payload.send_at,
+        send_at=(
+            now + dt.timedelta(minutes=payload.delay_minutes)
+            if payload.delay_minutes is not None
+            else payload.send_at
+        ),
         template_id=payload.template_id,
         template_source=payload.template_source,
         expected_content_hash=payload.expected_content_hash,

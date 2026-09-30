@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import re
 from collections.abc import Sequence
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
@@ -78,10 +79,25 @@ class ProviderStatus:
     provider: str
     last_successful_send_at: dt.datetime | None = None
     detail: str = ""
+    reason: str | None = None
+    """Machine-readable why the link is not usable, for the UI to switch on:
+    NOT_LINKED, LOGGED_OUT, SESSION_INVALID, REPLACED, FORBIDDEN, AGENT_OFFLINE.
+    ``None`` while healthy or merely reconnecting."""
+    account_jid: str | None = None
+    """Who is linked (``919876543210:12@s.whatsapp.net``); kept after a
+    disconnect so the UI can say "last connected as ..."."""
+    account_name: str | None = None
 
     @property
     def can_send(self) -> bool:
         return self.state.can_send
+
+
+def phone_from_jid(jid: str | None) -> str | None:
+    """``919876543210:12@s.whatsapp.net`` -> ``+919876543210``; ``None`` if the
+    id is not a user id."""
+    match = re.match(r"^(\d+)(?::\d+)?@", jid or "")
+    return f"+{match.group(1)}" if match else None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -176,3 +192,67 @@ class WhatsAppProvider(Protocol):
     def delivery_state(self, client_message_id: str) -> SendOutcome | None:
         """Look up a previous send. Resolves the AMBIGUOUS case without resending."""
         ...
+
+
+class PairingState(StrEnum):
+    """One attempt to link a phone, as the UI sees it."""
+
+    IDLE = "IDLE"
+    """No attempt running."""
+    STARTING = "STARTING"
+    WAITING_FOR_SCAN = "WAITING_FOR_SCAN"
+    """A QR code is on offer; the phone has not scanned it yet."""
+    SCANNED = "SCANNED"
+    """The phone scanned it; the link is being finished."""
+    SUCCEEDED = "SUCCEEDED"
+    EXPIRED = "EXPIRED"
+    CANCELLED = "CANCELLED"
+    FAILED = "FAILED"
+
+    @property
+    def in_progress(self) -> bool:
+        return self in {
+            PairingState.STARTING,
+            PairingState.WAITING_FOR_SCAN,
+            PairingState.SCANNED,
+        }
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class LinkStatus:
+    state: PairingState
+    detail: str = ""
+    pairing_id: str | None = None
+    qr: str | None = None
+    """The current QR payload (changes every ~20 s). Secret-ish: it is only
+    ever turned into an image for the local UI, never returned as text."""
+    qr_at: dt.datetime | None = None
+    agent_online: bool = True
+    """False when the WhatsApp service isn't running, so no QR can appear."""
+
+
+@runtime_checkable
+class WhatsAppLinking(Protocol):
+    """Linking (or re-linking) a phone from the UI.
+
+    Deliberately separate from :class:`WhatsAppProvider`: sending messages and
+    managing the link are different jobs, and a provider that cannot be linked
+    from the UI (the official Cloud API, say) simply does not implement this.
+    """
+
+    def start_link(self) -> LinkStatus:
+        """Begin a QR pairing (replacing any attempt already running)."""
+        ...
+
+    def cancel_link(self) -> LinkStatus:
+        """Abandon the attempt. Changes nothing about the current link."""
+        ...
+
+    def link_status(self) -> LinkStatus:
+        """Progress of the attempt, including the current QR."""
+        ...
+
+    def reconnect(self) -> None:
+        """Reconnect a link that is still valid (dropped or taken over)."""
+        ...
+

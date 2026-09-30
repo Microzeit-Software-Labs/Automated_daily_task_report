@@ -253,3 +253,111 @@ a.row:hover { border-color: var(--accent); }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* Modal + the 09:00 / 17:00 popup */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(8, 12, 16, 0.55);
+  overflow-y: auto;
+}
+.modal {
+  width: 100%;
+  max-width: 560px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sheet);
+  box-shadow: 0 24px 64px -20px rgba(0, 0, 0, 0.5);
+  outline: none;
+}
+.modal-head { display: flex; align-items: center; gap: 10px; padding: 18px 20px 0; }
+.modal-head h2 { flex: 1; margin: 0; font-size: 18px; }
+.modal-icon { display: inline-flex; color: var(--accent); }
+.modal-close {
+  font: inherit;
+  font-size: 24px;
+  line-height: 1;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.modal-close:hover { background: var(--sunk); color: var(--ink); }
+.modal-body { padding: 8px 20px 20px; }
+.prompt-question { font-size: 16px; font-weight: 600; margin: 12px 0; }
+.prompt-done { font-size: 16px; margin: 16px 0; outline: none; }
+.prompt-preview {
+  border: 1px solid var(--rule);
+  border-radius: var(--r-card);
+  background: var(--sunk);
+  padding: 10px;
+  margin-bottom: 14px;
+  max-height: 260px;
+  overflow: hidden;
+}
+.prompt-preview a { color: inherit; text-decoration: none; display: block; }
+.prompt-image { display: block; width: 100%; height: auto; max-height: 190px; object-fit: cover; object-position: top; border-radius: 6px; background: #fff; }
+.prompt-caption { display: block; margin-top: 8px; font-size: 13px; color: var(--ink-2); white-space: pre-line; }
+.prompt-groups { border: 0; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 6px; }
+.prompt-groups legend { font-weight: 600; font-size: 14px; padding: 0; margin-bottom: 6px; }
+.prompt-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.prompt-actions .btn { flex: 1 1 auto; }
+.prompt-actions .btn-primary { flex: 1 1 100%; padding: 12px 18px; }
+.prompt-custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-card);
+  background: var(--sunk);
+}
+.prompt-custom label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.prompt-custom p { flex: 1 1 100%; margin: 0; }
+.prompt-links { margin: 16px 0 0; text-align: center; }
+
+/* WhatsApp banner, link dialog, settings */
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px max(16px, calc((100vw - 760px) / 2));
+  border-bottom: 1px solid var(--rule);
+  flex-wrap: wrap;
+}
+.banner-stop { background: var(--stop-wash); color: var(--stop); }
+.banner-warn { background: var(--warn-wash); color: var(--warn); }
+.banner-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 320px; min-width: 0; }
+.banner-text span { color: var(--ink-2); font-size: 14px; }
+.banner .btn { flex: none; }
+.qr-box {
+  display: flex;
+  justify-content: center;
+  padding: 16px;
+  margin: 12px 0;
+  background: #ffffff; /* the QR needs a light quiet zone, in dark mode too */
+  border: 1px solid var(--rule);
+  border-radius: var(--r-card);
+}
+.qr-box img { display: block; max-width: 100%; height: auto; }
+.steps { margin: 4px 0 0; padding-left: 20px; color: var(--ink-2); }
+.steps li { margin: 2px 0; }
+.plain-list { margin: 8px 0 0; padding-left: 20px; color: var(--ink-2); }
+.plain-list li { margin: 4px 0; }
+.center { text-align: center; }
+.actions.inline { margin-top: 0; }
+code { font-size: 0.9em; background: var(--sunk); padding: 1px 5px; border-radius: 4px; }

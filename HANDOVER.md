@@ -1,8 +1,8 @@
 # Interlock — Handover
 
 **Project root:** `C:\Users\Admin\Documents\interlock`
-**Repo state:** git on `main`, two commits, nothing pushed. §10–§12 are committed in `b4ff38e`. As of 29 Sep 2026 the tree is clean and the full §7 battery is green.
-**Phase status:** Phase 1 complete. Read-only sheet import (§12) **verified against the user's real sheet**. Two-way Sheets sync (§10) built but unused. Real WhatsApp (§11) built, **never run against a real account**. Review/approve UI built (§13). No auth.
+**Repo state:** git on `main`, remote `origin` = `github.com/kaifas-collab/Automatied_task`. **The user's rule: do not commit or push without their explicit approval.** On 1 Oct 2026 they approved committing and pushing **M1-M3** together (run `git status -sb` to see whether it has gone up). One git stash holds an unfinished M4 draft (`git stash list`; it is not part of M1-M3).
+**Phase status:** Phases 1–3 done and **in real use**: sheet import, approval, image reports and group sends have all run against real WhatsApp. A refinement round is in progress (§14): **M1-M3 done**; M4 (UI redesign) starts when the user says so; M5 (installer) is last.
 
 ---
 
@@ -12,42 +12,33 @@
 `https://docs.google.com/spreadsheets/d/1dCIwGwZbLc3G2ziy9tWok0qfLKVN4CzQU_xE7k9SSig/edit#gid=0`
 It's shared "anyone with the link can view". At 09:00 and 17:00 Interlock should build a report from that sheet, let the user approve it, and send it to their WhatsApp work groups.
 
-**Verified working end to end (29 Sep 2026):**
-- The import fetched the real sheet and mirrored **96 tasks** into the dev DB. A second tick changed nothing.
-- The rendered evening report listed the 7 open tasks plus the 1 closed that day.
-- The dev DB (`interlock`) is at migration head `d3b8e61a0f47` and holds those 96 tasks.
+**Verified working in real use (30 Sep 2026):** the import mirrors the user's real sheet; reports go out as a table image plus caption to real WhatsApp groups through the local agent; delivery shows per group. Setup is complete: `.env` holds `WHATSAPP_PROVIDER=local_agent`, the ToS ack and `SHEET_IMPORT_URL`, and the agent is paired (`apps/agent/.wa-session/`).
 
 **The user's own decisions — don't re-ask:**
 - **Task source = read-only import from their sheet** (§12). They declined a Google Cloud service account, and they edit tasks in the sheet, not in Interlock.
 - Rows with status **"Subhan's Task" / "Safwan(a)'s Task" are left out of reports entirely** (they're delegated).
-- **WhatsApp via Baileys**, knowing it breaks WhatsApp's ToS (§11). The number in question is their **personal account**, which is in real work groups with their managers. Keep recommending a dedicated number, and a private test group for the first real send.
+- **WhatsApp via Baileys**, knowing it breaks WhatsApp's ToS (§11). It's their **personal account**, which is in real work groups with their managers. The "Test" group (2 members) is for trying things.
+- **Reports are a plain table image** (no colour coding), with overdue stated in words. **Frontend = Vite + React**, served by the API.
+- **Interlock should run in the background and start at Windows login** (M5), and the installer should also work on other laptops, installing missing prerequisites via winget after asking.
+- **No time estimates unless asked. Don't commit without approval.**
 
-**Blocked on the user (can't be done from a tool):**
-1. `.\scripts\setup-agent-role.ps1` — interactive; needs their Postgres superuser password.
-2. `cd apps\agent; npm start`, then scan the QR with their phone (WhatsApp → Settings → Linked Devices). WhatsApp Desktop's session **cannot** be reused (Phase 0 risk R2).
-3. `.\.venv\Scripts\python.exe scripts\whatsapp_test_send.py` — sends a message to their own number.
-4. Create a WhatsApp group containing only themselves, for the first real report.
+**Current work: the four-area refinement.** Plan: `C:\Users\Admin\.claude\plans\pasted-content-id-2df4-bismillah-proud-biscuit.md`. Status and details in §14.
+1. **M1** scheduling correctness: done.
+2. **M2** the 09:00/17:00 popup service: done.
+3. **M3** WhatsApp session management (QR reconnect/change phone from the UI): done and verified on real WhatsApp (§14).
+4. **M4** UI redesign (Reports page, report page, design system; Settings gets Sheet and Schedule cards): **waiting for the user to say go** (they asked to start it on a later day). A draft of its backend half (`DeliverySummary`, `ShareRepository.delivery_summaries`, a `since` filter on the reviews list) is saved in `git stash` as "M4 draft": `git stash show -p` to see it, `git stash pop` to start from it. The banner, link dialog and Settings page (WhatsApp card) already exist from M3.
+5. **M5** one-command installer + background service: **last**, as the user asked.
 
-**Config the user still needs in `.env`** (not set yet — `.env` holds real credentials, never print it):
-```dotenv
-SHEET_IMPORT_URL=https://docs.google.com/spreadsheets/d/1dCIwGwZbLc3G2ziy9tWok0qfLKVN4CzQU_xE7k9SSig/edit#gid=0
-WHATSAPP_PROVIDER=local_agent
-WHATSAPP_LOCAL_AGENT_TOS_ACK=true
-```
-
-**Next work, in order:**
-1. **First real end-to-end send.** Walk the user through steps 1–4, set the config, and build the UI once (`cd apps\web; npm install; npm run build`, see `docs/web-ui.md`). Then start the worker and the API (`.\.venv\Scripts\python.exe -m uvicorn interlock.api.main:app` and `-m interlock.workers.loop`). Open http://127.0.0.1:8000/. Under **Groups**, find and pin the test group. Under **Reports**, open today's report or press **Start a report now**, then **Share to 1 group**.
-   - Watch the risk flagged in §11: the crash-resend WhatsApp-message-id dedup has never been verified.
-   - `baileys.ts` has never run against real WhatsApp, so expect to debug it here.
-2. **Review/approve UI: built 30 Sep 2026 (§13).** It has never been clicked through by a human in a real browser; only headless screenshots and API-level runs so far. Watch the first real use for rough edges.
-3. Not committed yet: the UI work (§13) and the HANDOVER changes. Ask the user.
+**Operational notes:**
+- Start everything with `.\scripts\start-interlock.ps1` (agent, API+UI, worker; `-NoAgent` if the agent is already running). **Exactly one agent may run.** Until M5's supervisor exists, nothing restarts a stopped agent, and on 1 Oct its heartbeat had gone stale overnight.
+- After **any** backend change the running API/worker must be restarted: the rebuilt UI in `apps/web/dist` is shared and can be newer than the running API (e.g. it sends `delay_minutes`, which an older API rejects).
 
 **How this was built — keep doing it:**
 - Plan non-trivial work first (plan files live in `C:\Users\Admin\.claude\plans\`).
 - Test against real Postgres, not mocks.
 - Run the full battery in §7 before calling anything done.
 - Every "decision" section below records *why*; read it before changing behaviour.
-- The user likes short status updates and honest time estimates.
+- The user likes short status updates. Answer "how long?" honestly if asked, but don't volunteer estimates. Don't commit without approval.
 
 Read the rest of this file before touching code. It covers what exists, where, why it's built this way, and bugs already fixed so you don't rediscover them.
 
@@ -494,3 +485,55 @@ The user found the emoji text report unprofessional. Reports now go out as a **s
 - **Found while deploying:** two agent processes were running at once, one started by hand and one from the launcher. Exactly one must run. `start-interlock.ps1 -NoAgent` exists for when the agent is already up.
 - **Group sends never completed, found on the first real image sends (30 Sep 2026, now fixed).** For **group** chats, Baileys 7 never emits a `messages.update` status. The server's success ack produces no event at all, and group delivery receipts arrive per member on `message-receipt.update` (see `handleReceipt` in Baileys' `lib/Socket/messages-recv.js`). The agent waited only on `messages.update`, so every group send reached WhatsApp but stayed `CLAIMED`. Python timed out after 20 s, retried 4×, and marked the recipient `FAILED`. The same `client_message_id` meant those retries did **not** resend, but the user approved new reports four times thinking it had failed, so the groups got duplicates. Now `BaileysAgent` completes a send on whichever comes first: a `message-receipt.update` (DEVICE), a `messages.update` SERVER/DEVICE/READ, or `SERVER_ACCEPT_WINDOW_MS` (3 s) after `sendMessage` resolves with no ERROR. An ERROR inside that window still releases the row for retry. **Consequence:** the 5 jobs / 10 recipients from 30 Sep 12:50–13:00 are recorded `FAILED` but were actually delivered. Don't press Retry on them (a manual retry mints a new id and *would* resend).
 
+---
+
+## 14. Refinement round (1 Oct 2026): popup, WhatsApp sessions, UI, installer
+
+The user asked for four refinements without rewriting anything that works: a cleaner Reports UI, a 09:00/17:00 popup with send options, WhatsApp reconnect from the UI (QR), and a one-command installer. Plan file: `C:\Users\Admin\.claude\plans\pasted-content-id-2df4-bismillah-proud-biscuit.md` (read it: it has the full design for M3–M5, including the WhatsApp session table).
+
+### M1 — scheduling correctness (done, commit `9d55b1f`)
+
+**Bug found while planning:** `validity.py` measured the grace from *approval*, so "approve at 17:00, send at 21:30" was held back as stale. Scenario 5 only passed because its test clock committed at 22:30, after 21:30 (the §6.5 clock-desync trap).
+- `evaluate_send_validity(..., run_at=)` now measures both the day boundary and the grace from the **intended** send time, `intended_send_time() = max(approval, run_at)`. Immediate sends behave as before. Scenario 5 now commits at 17:00.
+- While WhatsApp can't send (`health().can_send` is false, read once per tick), due actions are handed back with `reschedule(..., note=WAITING_FOR_WHATSAPP)` and due retries are skipped: **no attempts burned**. On reconnect they send if still in time; otherwise they're held back with the new `DeferReason.WHATSAPP_DISCONNECTED` (migration `f1a9c3d7e052`).
+- An automatic **retry** whose report's day has ended fails as `MISSED_DAY` instead of delivering yesterday's report (`missed_its_day`). A human pressing Retry is deliberately not held to it.
+- Tests: `tests/acceptance/test_send_later_and_outage.py`, `TestScheduledForLater` in `test_validity.py`.
+
+### M2 — the popup service (done)
+
+- **Derived, not stored:** the popup is a pure function of the open review in Postgres (`domain/approvals/prompt.py::pick_prompt`): today's **latest** scheduled review if it's open (`REVIEW_PENDING`/`USER_EDITING`/`READY`) and not snoozed. There's no notification table to lose or duplicate; a restart can't lose it, and a second tab can't show it twice. A handled evening review does not resurrect the ignored morning one. MANUAL reviews never prompt.
+- **Snooze** = `approval_requests.snoozed_until` (migration `a7d3e5b91c64`), orthogonal to the approval state machine. `ReviewService.snooze` (1–240 min, open reviews only, audited as `REVIEW_SNOOZED`); `POST /approval-requests/{id}/snooze`; `GET /notifications/prompt`.
+- **Actions reuse `/commit`**: Send now, In 5 minutes, Custom date+time (≤7 days ahead), and Skip (`UPDATE_ONLY`). "In 5 minutes" is sent as `delay_minutes`, which the **server** counts from its own clock (mutually exclusive with `send_at`); a browser clock can't skew it.
+- **Web:** `components/PromptHost.tsx` (app-level; polls every 20 s and on focus; hidden on that review's own page; desktop notification + tab-title marker when the tab is in the background; closing with × means Snooze 30), `components/Modal.tsx`, `components/ReportPreview.tsx`. `useShare.ts` holds the shared share logic (groups, preview polling, hash guard, commit): **both the popup and the report page use it**.
+- Latency: the worker creates the review on its tick (`SCHEDULER_TICK_SECONDS`, 30 s), then the page polls, so the popup appears within about a minute of 09:00/17:00.
+- Tests: `test_prompt.py` (unit), `test_prompt_and_snooze.py` (incl. restart survival), web `logic.test.ts` (27).
+
+**How it was verified in a real browser** (repeat this for UI work): a disposable API on `interlock_test` with `WHATSAPP_PROVIDER=mock` and a **file-controlled warp clock**, plus a ~100-line CDP driver over headless Edge (Node 22's built-in WebSocket) that seeds data, really clicks, and checks server state. It covered: popup appears by itself, hidden on the report's own page, Send now, 5 min, custom tomorrow 09:00, skip, × = snooze, snooze → quiet through a reload → returns by itself after the clock is advanced 31 min, phone width. The scripts lived in the session scratchpad (not in the repo); recreate them if needed (the wiring is: `create_app(settings, clock=WarpClock(), whatsapp_provider=Mock...)`).
+
+### M3 — WhatsApp session management (done, verified on real WhatsApp)
+
+**Design (kept from the existing agent, nothing rewritten):** one agent process owns the session; the UI controls it through the existing Postgres outbox. New ops `link_start` / `link_cancel` / `reconnect`; progress and the QR come back through `whatsapp_agent_status` (migration `c3b7e1f94a26`: `status_reason`, `account_jid/name`, `pairing_*`).
+
+- **Never loop, never print stray QRs** (`apps/agent/src/disconnect.ts`, pure and tested): a dropped connection reconnects with back-off (2 s → 60 s); 401/500/411 means the session is dead, so it is **retired** (the pointer is cleared; the folder is left on disk untouched and tidied later) and the state is `LOGIN_REQUIRED` with reason `LOGGED_OUT` / `SESSION_INVALID`; 440 (taken over) and 403 (refused) halt with reasons `REPLACED` / `FORBIDDEN`; 515 (after a scan) restarts at once. With **no completed pairing on disk no socket is opened at all**, so there is no QR in the background (`NOT_LINKED`). A QR on the *main* socket means the session is invalid, and it halts.
+- **Sessions are folders that are never renamed** (`sessionFiles.ts::SessionStore`): `.wa-session/` is the original folder, used until the first UI link; every phone linked from the UI gets its own `.wa-sessions/s-<time>-<id>/`, and `.wa-sessions/active.json` is an atomic pointer naming the live one (`{"dir": null}` = none). "Switching" is a pointer write. `activeDir()` survives a damaged pointer (newest complete session wins). Old folders are tidied by `prune()` (keeps the live one and the newest other), strictly best-effort.
+- **Linking and switching** (`pairing.ts`, `linkController.ts`, `handover.ts`): each attempt links into a fresh numbered folder, so the live connection and scheduled sends keep working while a QR is on screen. `performHandover()` then: waits for that folder to go quiet (`waitForQuiet`: the socket that linked it is still flushing files) → opens the new session and waits for WhatsApp to accept it (`awaitOpen`) → activates it (pointer) → starts using it → and **last, best-effort**, logs the old device out. Any failure before activation leaves the old link exactly as it was. Cancel / expiry / failure change nothing, and a failed switch does **not** delete the new session (it may be fine).
+- **Single instance:** a Postgres advisory lock, taken before `reset_stale_claims` (which would otherwise steal a live peer's work). A second agent exits with code 3. Not connected ⇒ the loop claims only control ops (`claim_next_control`), so a send or lookup it can't do is never left stuck CLAIMED.
+- **Python:** `WhatsAppLinking` is a separate port from `WhatsAppProvider` (`domain/ports/whatsapp.py`, plus `LinkStatus`, `PairingState`, `phone_from_jid`); `LocalAgentProvider` and the mock implement it. A failed group lookup now raises a clear error instead of a 20 s timeout, and `/whatsapp/groups/resolve` fails fast when disconnected.
+- **API:** `GET/POST/DELETE /whatsapp/link`, `GET /whatsapp/link/qr.svg` (segno; dark on an explicit white ground, since a transparent QR is unscannable in dark mode; `Cache-Control: no-store`), `POST /whatsapp/reconnect`; `/whatsapp/status` gained `reason`, `account_number`, `account_name`.
+- **Web:** `WhatsAppBanner` (page-wide, per-reason wording in `logic.ts::whatsappBanner`), `WhatsAppLinkModal` (confirm-before-changing-phone, QR that refreshes itself, scanned / success / expired / failed / service-stopped), a **Settings** page with the WhatsApp card, and a pill that says "service stopped" (`AGENT_OFFLINE`) separately from "needs linking". The banner is silent for the mock provider and for a brief automatic reconnect.
+- **Tests:** agent 71 (pure logic, fake sockets, real temp dirs), `test_whatsapp_linking.py` (against the agent's own SQL), `test_whatsapp_link_api.py`, web 39. Real-browser run of the six reconnect scenarios (logged out, expired QR, change phone, taken over, service stopped, phone width) against a scripted provider named `e2e-fake` (the name `mock` is deliberately treated as test mode by the UI).
+
+**Verified live against the user's real WhatsApp (1 Oct 2026):** the new agent takes the lock, reconnects to the existing session in ~2 s and reports `+918910056457`; `POST /whatsapp/link` produces a real QR within 2 s, WhatsApp rotates it after ~60 s, the live connection stays CONNECTED throughout, and cancel leaves no scratch files.
+**The first real phone test FAILED, and was instructive (1 Oct 2026):** the first version of the switch-over logged the old device out, then *renamed* the freshly linked session folder into place. Baileys was still writing ~1,200 files into it, Windows refused (`EPERM`), the rollback restored the old (now logged-out) session, and then the clean-up `rmSync` of the new folder failed half-way (`ENOTEMPTY`) *after deleting `creds.json`*. Result: WhatsApp showed the new device as linked but Interlock had lost its credentials, the agent still claimed CONNECTED with no socket (stale state), and the user needed another scan. Fixed by the design above (no renames; prove the new session before retiring the old; clean-up can never throw or delete a session) with regression tests for each step.
+**Verified live after the fix:** logged-out detection on the real thing (the agent opened the dead old session, got 401, stopped cleanly in ~6 s and showed the banner), then a full relink from the banner: scan → link → `performHandover` → `adopt.switched`, connected as `+918910056457` (device `:35`), no errors, nothing renamed.
+**Then verified live, all on real WhatsApp:** *Link a different phone* while connected, three times: main phone → a second number (`+917980381503`, in the "Test" group but **not** the two work groups) → back to the main phone (`+918910056457`, in all three). Each time the new session was proven before it became active, the old device was logged out last, and `prune()` removed the dead folders (no `EPERM`/`ENOTEMPTY`, no errors). The user scanned with a different number on purpose or by chance, which happens to be the realistic "new number isn't in the groups" case: `POST /whatsapp/groups/resolve` for each pinned group is a cheap read-only check of membership.
+**Not done live (optional):** removing the Interlock device from the phone *while connected* (banner within ~15 s, then Reconnect). The same 401 handler was exercised for real at connect time; the runtime path differs only in how Baileys delivers the same close code. The user should also remove the orphan entry the failed first attempt left in their main phone's Linked Devices.
+
+**Things learnt (don't repeat):**
+- **Never rename or delete a folder Baileys has recently written to on Windows.** Address sessions in place (pointer), wait for quiet, and treat deletion as optional tidying. Test the real thing on a real phone before trusting a session-handling design; the fakes could not have shown this.
+- `.gitignore` covered only `.wa-session/`; the agent's session folders hold credentials, so it is now `apps/agent/.wa-session*/` (this also covers `.wa-sessions/`).
+- The agent used to keep reporting CONNECTED after it had closed its own socket; any path that closes the live socket must set an accurate state (the new design never leaves a socket-less CONNECTED).
+- A real `setTimeout` inside pairing made each agent test file linger ~3 minutes (and race). Timers are injectable (`Timers`) and the real one is `unref()`'d. The agent suite takes ~1 s.
+- Windows paths with backslashes in inline `python -` heredocs get mangled (`\a` became a BEL character). Use the Write/Edit tools for any text containing backslashes, and scan for control characters.
+
+### Still to do: M4 (UI redesign: Reports page, report page, design system), M5 (installer + background service) — see the plan file.

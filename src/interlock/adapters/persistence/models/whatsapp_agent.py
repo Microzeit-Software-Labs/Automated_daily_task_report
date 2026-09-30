@@ -30,9 +30,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from interlock.adapters.persistence.base import Base
 from interlock.adapters.persistence.types import TIMESTAMPTZ, ULID_LENGTH, check_in
-from interlock.domain.ports.whatsapp import ConnectionState
+from interlock.domain.ports.whatsapp import ConnectionState, PairingState
 
-OPS = ("resolve_group", "send_text", "test_send")
+OPS = ("resolve_group", "send_text", "test_send", "link_start", "link_cancel", "reconnect")
 STATUSES = ("PENDING", "CLAIMED", "DONE")
 STATUS_ROW_ID = "agent"
 
@@ -79,15 +79,34 @@ class WhatsAppAgentStatusRow(Base):
     __tablename__ = "whatsapp_agent_status"
     __table_args__ = (
         CheckConstraint(check_in("state", ConnectionState), name="ck_whatsapp_agent_status_state"),
+        CheckConstraint(
+            check_in("pairing_state", PairingState), name="ck_whatsapp_agent_status_pairing_state"
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(20), primary_key=True, default=STATUS_ROW_ID)
     state: Mapped[str] = mapped_column(String(20), nullable=False)
     detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status_reason: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    """Why the link is unusable, machine-readable (NOT_LINKED, LOGGED_OUT, ...);
+    overwritten on every heartbeat, NULL while healthy."""
+    account_jid: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    account_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     agent_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
     last_successful_send_at: Mapped[dt.datetime | None] = mapped_column(
         TIMESTAMPTZ, nullable=True
     )
     last_canary_at: Mapped[dt.datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
     last_canary_ok: Mapped[bool | None] = mapped_column(nullable=True)
+    pairing_state: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="IDLE", server_default="IDLE"
+    )
+    """The one phone-linking attempt that may be running. Written by the agent
+    (``update_pairing`` in agent_queries.sql), polled by the UI."""
+    pairing_id: Mapped[str | None] = mapped_column(String(ULID_LENGTH), nullable=True)
+    pairing_qr: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pairing_qr_at: Mapped[dt.datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
+    pairing_detail: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
     updated_at: Mapped[dt.datetime] = mapped_column(TIMESTAMPTZ, nullable=False)

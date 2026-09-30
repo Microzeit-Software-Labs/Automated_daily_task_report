@@ -27,12 +27,11 @@ import json
 import re
 import threading
 import time
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import Engine, text
+from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from interlock.adapters.persistence.base import make_engine, make_session_factory
@@ -97,6 +96,11 @@ class FakeAgent:
 
         self.send_behaviors: dict[str, FakeAgentBehavior] = {}
         self.group_candidates: dict[str, list[dict[str, Any]]] = {}
+        self.resolve_error: dict[str, Any] | None = None
+        """When set, resolve_group is answered with this error result."""
+        self.reconnect_ok = True
+        """What a ``reconnect`` answers: ok, or "not linked"."""
+        self.control_ops: list[str] = []
         self.sent_count = 0
         self.wa_message_ids_minted: list[str] = []
 
@@ -146,6 +150,30 @@ class FakeAgent:
             self._process_send_text(row)
         elif row["op"] == "resolve_group":
             self._process_resolve_group(row)
+        elif row["op"] == "link_start":
+            self.control_ops.append("link_start")
+            self._update_pairing(
+                state="WAITING_FOR_SCAN",
+                pairing_id=row["id"],
+                qr="qr-payload-1",
+                detail="Scan the code with WhatsApp.",
+            )
+            self._complete(row["id"], result={"started": True})
+        elif row["op"] == "link_cancel":
+            self.control_ops.append("link_cancel")
+            self._update_pairing(
+                state="CANCELLED", pairing_id=None, qr=None, detail="Linking was cancelled."
+            )
+            self._complete(row["id"], result={"cancelled": True})
+        elif row["op"] == "reconnect":
+            self.control_ops.append("reconnect")
+            self._complete(
+                row["id"],
+                result={
+                    "ok": self.reconnect_ok,
+                    "outcome": "started" if self.reconnect_ok else "not_linked",
+                },
+            )
         else:
             self._complete(
                 row["id"],
@@ -194,11 +222,34 @@ class FakeAgent:
         raise ValueError(f"unknown FakeAgentBehavior.outcome {behavior.outcome!r}")
 
     def _process_resolve_group(self, row: dict[str, Any]) -> None:
+        if self.resolve_error is not None:
+            self._complete(row["id"], result=self.resolve_error)
+            return
         name = row["payload"]["name"]
         candidates = self.group_candidates.get(name)
         if candidates is None:
             return  # left CLAIMED -- simulates the agent never answering
         self._complete(row["id"], result={"candidates": candidates})
+
+    def _update_pairing(
+        self, *, state: str, pairing_id: str | None, qr: str | None, detail: str
+    ) -> None:
+        """What the real agent does as a phone links -- via the shared SQL."""
+        session = self._session_factory()
+        try:
+            session.execute(
+                text(self._queries["update_pairing"]),
+                {
+                    "pairing_state": state,
+                    "pairing_id": pairing_id,
+                    "pairing_qr": qr,
+                    "pairing_qr_at": dt.datetime.now(dt.UTC) if qr else None,
+                    "pairing_detail": detail,
+                },
+            )
+            session.commit()
+        finally:
+            session.close()
 
     def _mint_wa_id(self) -> str:
         with self._lock:
@@ -235,24 +286,6 @@ class FakeAgent:
             session.commit()
         finally:
             session.close()
-
-
-@pytest.fixture
-def agent_session_factory(migrated_engine: Engine) -> Iterator[sessionmaker[Session]]:
-    """Unlike db_session elsewhere in this suite, tests here commit for
-    real (see the module docstring), so truncating only *before* the test
-    is not enough -- a row this fixture leaves behind (most consequentially
-    the single-row whatsapp_agent_status) would collide with whatever the
-    next test, in this file or another, tries to insert. Truncate on both
-    sides."""
-
-    def _truncate() -> None:
-        with migrated_engine.begin() as conn:
-            conn.execute(text("TRUNCATE TABLE whatsapp_agent_commands, whatsapp_agent_status"))
-
-    _truncate()
-    yield make_session_factory(migrated_engine)
-    _truncate()
 
 
 def _make_provider(

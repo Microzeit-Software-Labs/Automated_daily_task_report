@@ -75,6 +75,49 @@ class TestSendLater:
         assert run_tick(whatsapp, now=EVENING + 4 * MINUTE).sent == 0
         assert run_tick(whatsapp, now=EVENING + 5 * MINUTE + SECOND).sent == 1
 
+    def test_delay_minutes_is_counted_by_the_servers_clock(
+        self, client: TestClient, clock: FrozenClock, whatsapp: MockWhatsAppProvider
+    ) -> None:
+        clock.set_to(EVENING)
+        group = client.post(
+            "/whatsapp/groups", json={"display_name": "Test", "external_jid": "test@g.us"}
+        ).json()
+        review = trigger_reviews(now=EVENING)[-1].request
+
+        commit = client.post(
+            f"/approval-requests/{review.id}/commit",
+            json={
+                "mode": "SHARE_ONLY",
+                "action_version": 1,
+                "recipient_group_ids": [group["id"]],
+                "delay_minutes": 5,
+            },
+        )
+
+        assert commit.status_code == 200
+        [share] = client.get(f"/approval-requests/{review.id}").json()["shares"]
+        assert dt.datetime.fromisoformat(share["run_at"]) == EVENING + 5 * MINUTE
+        assert run_tick(whatsapp, now=EVENING + 4 * MINUTE).sent == 0
+        assert run_tick(whatsapp, now=EVENING + 5 * MINUTE + SECOND).sent == 1
+
+    def test_send_at_and_delay_minutes_together_are_refused(
+        self, client: TestClient, clock: FrozenClock
+    ) -> None:
+        clock.set_to(EVENING)
+        review = trigger_reviews(now=EVENING)[-1].request
+
+        response = client.post(
+            f"/approval-requests/{review.id}/commit",
+            json={
+                "mode": "UPDATE_ONLY",
+                "action_version": 1,
+                "send_at": (EVENING + HOUR).isoformat(),
+                "delay_minutes": 5,
+            },
+        )
+
+        assert response.status_code == 422
+
     def test_scheduled_for_tomorrow_morning_sends_tomorrow_morning(
         self, client: TestClient, clock: FrozenClock, whatsapp: MockWhatsAppProvider
     ) -> None:
