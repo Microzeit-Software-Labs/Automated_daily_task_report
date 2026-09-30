@@ -451,6 +451,137 @@
         }
       }
     },
+    "/approval-requests": {
+      "get": {
+        "tags": [
+          "approvals"
+        ],
+        "summary": "List Reviews",
+        "description": "Newest first. How a client finds today's 09:00 / 17:00 review.",
+        "operationId": "list_reviews_approval_requests_get",
+        "parameters": [
+          {
+            "name": "local_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Local Date"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApprovalRequestOut"
+                  },
+                  "title": "Response List Reviews Approval Requests Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "approvals"
+        ],
+        "summary": "Create Manual Review",
+        "description": "Start a MANUAL review now, outside the 09:00 / 17:00 schedule. Sends\nnothing by itself -- it still has to be approved through ``/commit``.",
+        "operationId": "create_manual_review_approval_requests_post",
+        "parameters": [
+          {
+            "name": "x-actor-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Actor-Id"
+            }
+          },
+          {
+            "name": "x-actor-name",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Actor-Name"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRequestOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/approval-requests/{request_id}": {
       "get": {
         "tags": [
@@ -669,6 +800,45 @@
                   "$ref": "#/components/schemas/PreviewResponse"
                 }
               }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/approval-requests/{request_id}/preview.png": {
+      "get": {
+        "tags": [
+          "approvals"
+        ],
+        "summary": "Preview Image",
+        "description": "The table image a commit right now would freeze. 404 in text format.",
+        "operationId": "preview_image_approval_requests__request_id__preview_png_get",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "image/png": {}
             }
           },
           "422": {
@@ -1014,6 +1184,45 @@
         }
       }
     },
+    "/shares/snapshots/{snapshot_id}/image.png": {
+      "get": {
+        "tags": [
+          "shares"
+        ],
+        "summary": "Snapshot Image",
+        "description": "The exact image that was approved and sent. Immutable, so cacheable.",
+        "operationId": "snapshot_image_shares_snapshots__snapshot_id__image_png_get",
+        "parameters": [
+          {
+            "name": "snapshot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Snapshot Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "image/png": {}
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/sync/conflicts": {
       "get": {
         "tags": [
@@ -1138,6 +1347,27 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/config/ui": {
+      "get": {
+        "tags": [
+          "ui"
+        ],
+        "summary": "Ui Config",
+        "operationId": "ui_config_config_ui_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UiConfigOut"
                 }
               }
             }
@@ -1388,6 +1618,17 @@
               }
             ],
             "title": "Template Source"
+          },
+          "expected_content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Content Hash"
           }
         },
         "additionalProperties": false,
@@ -1537,11 +1778,21 @@
           "rendered_body": {
             "type": "string",
             "title": "Rendered Body"
+          },
+          "content_hash": {
+            "type": "string",
+            "title": "Content Hash"
+          },
+          "has_image": {
+            "type": "boolean",
+            "title": "Has Image",
+            "default": false
           }
         },
         "type": "object",
         "required": [
-          "rendered_body"
+          "rendered_body",
+          "content_hash"
         ],
         "title": "PreviewResponse"
       },
@@ -1613,6 +1864,13 @@
           },
           "changes_since_last_share": {
             "$ref": "#/components/schemas/ChangeSummaryOut"
+          },
+          "shares": {
+            "items": {
+              "$ref": "#/components/schemas/ShareOut"
+            },
+            "type": "array",
+            "title": "Shares"
           }
         },
         "type": "object",
@@ -1692,6 +1950,55 @@
         ],
         "title": "ShareJobState",
         "description": "One approved send. Fans out to one or more recipients."
+      },
+      "ShareOut": {
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/ShareJobOut"
+          },
+          "run_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run At"
+          },
+          "rendered_body": {
+            "type": "string",
+            "title": "Rendered Body"
+          },
+          "snapshot_id": {
+            "type": "string",
+            "title": "Snapshot Id"
+          },
+          "has_image": {
+            "type": "boolean",
+            "title": "Has Image",
+            "default": false
+          },
+          "recipients": {
+            "items": {
+              "$ref": "#/components/schemas/ShareRecipientOut"
+            },
+            "type": "array",
+            "title": "Recipients"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job",
+          "run_at",
+          "rendered_body",
+          "snapshot_id",
+          "recipients"
+        ],
+        "title": "ShareOut",
+        "description": "One approved send and how it went, per group -- the review screen's\ndelivery panel."
       },
       "ShareRecipientOut": {
         "properties": {
@@ -2237,6 +2544,54 @@
           "remaining"
         ],
         "title": "TaskSummaryOut"
+      },
+      "UiConfigOut": {
+        "properties": {
+          "timezone": {
+            "type": "string",
+            "title": "Timezone"
+          },
+          "morning_alert_time": {
+            "type": "string",
+            "format": "time",
+            "title": "Morning Alert Time"
+          },
+          "evening_alert_time": {
+            "type": "string",
+            "format": "time",
+            "title": "Evening Alert Time"
+          },
+          "allow_custom_send_time": {
+            "type": "boolean",
+            "title": "Allow Custom Send Time"
+          },
+          "sheet_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sheet Url"
+          },
+          "user_name": {
+            "type": "string",
+            "title": "User Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "timezone",
+          "morning_alert_time",
+          "evening_alert_time",
+          "allow_custom_send_time",
+          "sheet_url",
+          "user_name"
+        ],
+        "title": "UiConfigOut",
+        "description": "The few settings the browser UI needs to label things correctly."
       },
       "ValidationError": {
         "properties": {

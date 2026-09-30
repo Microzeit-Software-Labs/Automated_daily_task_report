@@ -109,6 +109,9 @@ async function processSend(cmd: ClaimedCommand, ctx: CommandContext): Promise<vo
   const body = isCanary
     ? `Interlock agent canary (${String(cmd.payload["reason"] ?? "test")}) -- ignore.`
     : String(cmd.payload["body"] ?? "");
+  // Image-format reports: the PNG frozen at approval, with body as caption.
+  const imageB64 = isCanary ? null : cmd.payload["image_b64"];
+  const image = typeof imageB64 === "string" && imageB64 ? Buffer.from(imageB64, "base64") : null;
 
   if (!jid) {
     // Not connected long enough to know our own jid yet, or a malformed
@@ -128,7 +131,7 @@ async function processSend(cmd: ClaimedCommand, ctx: CommandContext): Promise<vo
   }
 
   try {
-    await ctx.baileys.send(jid, body, waMessageId, cmd.id);
+    await ctx.baileys.send(jid, body, waMessageId, cmd.id, image);
     ctx.rateLimiter.recordSend();
     ctx.breaker.recordSuccess();
     // Completion is asynchronous from here -- BaileysAgent completes (or

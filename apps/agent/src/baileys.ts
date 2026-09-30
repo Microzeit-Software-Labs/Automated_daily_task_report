@@ -62,7 +62,13 @@ export interface GroupInfo {
 
 interface PendingSend {
   commandId: string;
+  timer?: NodeJS.Timeout;
 }
+
+/** How long after WhatsApp accepts a send we wait for a rejection before
+ * reporting it delivered to the server. A server-side rejection arrives as a
+ * messages.update ERROR within this window. */
+export const SERVER_ACCEPT_WINDOW_MS = 3_000;
 
 export interface BaileysAgentOptions {
   db: AgentDb;
@@ -74,6 +80,7 @@ export class BaileysAgent {
   private sock!: WASocket;
   private loggedOutCode!: number;
   private state: AgentConnectionState = "CONNECTING";
+  private closing = false;
   private readonly authDir: string;
   private readonly db: AgentDb;
   private readonly onStateChangeCb: BaileysAgentOptions["onStateChange"];
@@ -102,6 +109,16 @@ export class BaileysAgent {
     this.sock.ev.on("creds.update", saveCreds);
     this.sock.ev.on("connection.update", (update) => this.handleConnectionUpdate(update));
     this.sock.ev.on("messages.update", (updates) => this.handleMessageUpdates(updates));
+    // Groups never get a per-message status in messages.update -- Baileys
+    // reports their delivery per member here instead (see handleReceipt in
+    // Baileys' messages-recv.js). The first one proves delivery to a device.
+    this.sock.ev.on("message-receipt.update", (receipts) => {
+      for (const { key } of receipts) {
+        if (key.id) {
+          this.finish(key.id, "DEVICE");
+        }
+      }
+    });
   }
 
   private handleConnectionUpdate(update: Partial<BaileysConnectionState>): void {
@@ -115,6 +132,9 @@ export class BaileysAgent {
     if (connection === "open") {
       this.setState("CONNECTED", "connected");
     } else if (connection === "close") {
+      if (this.closing) {
+        return; // our own shutdown -- never reconnect (and print a new QR) on the way out
+      }
       const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
       if (statusCode === this.loggedOutCode) {
         // Deliberately no reconnect: retrying a logged-out session just
@@ -141,28 +161,49 @@ export class BaileysAgent {
       if (!waId || update.status == null) {
         continue;
       }
-      const pending = this.pendingSends.get(waId);
-      if (!pending) {
-        continue;
-      }
       const ack = ackToDeliveryAck(update.status);
       if (ack === "SERVER" || ack === "DEVICE" || ack === "READ") {
-        this.pendingSends.delete(waId);
-        void this.db.complete(pending.commandId, {
-          accepted: true,
-          provider_message_id: waId,
-          ack,
-        });
+        this.finish(waId, ack);
       } else if (ack === "ERROR") {
-        this.pendingSends.delete(waId);
-        void this.db.releaseTransient(pending.commandId);
+        const pending = this.take(waId);
+        if (pending) {
+          logger.warn({ commandId: pending.commandId, waId }, "send.rejected_by_server");
+          void this.db.releaseTransient(pending.commandId);
+        }
       }
     }
+  }
+
+  /** Complete the outbox row once, whichever signal arrives first. */
+  private finish(waId: string, ack: "SERVER" | "DEVICE" | "READ"): void {
+    const pending = this.take(waId);
+    if (!pending) {
+      return;
+    }
+    void this.db
+      .complete(pending.commandId, { accepted: true, provider_message_id: waId, ack })
+      .catch((err: unknown) => logger.error({ err, commandId: pending.commandId }, "complete.failed"));
+  }
+
+  private take(waId: string): PendingSend | undefined {
+    const pending = this.pendingSends.get(waId);
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.pendingSends.delete(waId);
+    }
+    return pending;
   }
 
   private setState(state: AgentConnectionState, detail: string): void {
     this.state = state;
     this.onStateChangeCb?.(state, detail);
+  }
+
+  /** Close the socket for good. Keeps the saved pairing, so the next start
+   * reconnects without a QR scan. */
+  close(): void {
+    this.closing = true;
+    this.sock.end(undefined);
   }
 
   currentState(): AgentConnectionState {
@@ -182,17 +223,32 @@ export class BaileysAgent {
     }));
   }
 
-  /** Sends, then tracks the WhatsApp message id against this outbox row so
-   * a later delivery receipt (handled above -- possibly seconds away)
-   * completes it. Never completes the row itself: returning here only
-   * means "the message left this process", not "WhatsApp accepted it". */
-  async send(jid: string, body: string, waMessageId: string, commandId: string): Promise<void> {
+  /** Sends, then tracks the WhatsApp message id against this outbox row.
+   * The row completes on the first of: a device receipt (groups), a
+   * SERVER/DEVICE/READ status (1:1 chats), or SERVER_ACCEPT_WINDOW_MS after
+   * WhatsApp took the message with no rejection. A rejection in that window
+   * releases the row for retry instead. */
+  async send(
+    jid: string,
+    body: string,
+    waMessageId: string,
+    commandId: string,
+    image: Buffer | null = null
+  ): Promise<void> {
     this.pendingSends.set(waMessageId, { commandId });
     try {
-      await this.sock.sendMessage(jid, { text: body }, { messageId: waMessageId });
+      const content = image ? { image, caption: body } : { text: body };
+      await this.sock.sendMessage(jid, content, { messageId: waMessageId });
     } catch (err) {
-      this.pendingSends.delete(waMessageId);
+      this.take(waMessageId);
       throw err;
+    }
+    // WhatsApp took the message. Baileys emits no success ack for it (only an
+    // ERROR on rejection, and group receipts only per member), so after a
+    // short window with no rejection, record it as delivered to the server.
+    const pending = this.pendingSends.get(waMessageId);
+    if (pending) {
+      pending.timer = setTimeout(() => this.finish(waMessageId, "SERVER"), SERVER_ACCEPT_WINDOW_MS);
     }
   }
 }

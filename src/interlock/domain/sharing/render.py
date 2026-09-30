@@ -152,6 +152,28 @@ def _environment() -> SandboxedEnvironment:
     return env
 
 
+def select_report_tasks(
+    tasks: Sequence[Task], *, today: dt.date, tz: ZoneInfo
+) -> list[Task]:
+    """The tasks a report lists, in report order -- shared by the text and the
+    table-image formats so both always show the same set.
+
+    Open tasks, plus whatever was finished today. A task completed on any
+    earlier day is never listed -- with months of history in the task list,
+    "top 15 by urgency" would otherwise be 15 long-closed tasks. Completed-
+    today tasks sort after every open one.
+    """
+    return sorted(
+        (
+            task
+            for task in tasks
+            if not task.is_deleted
+            and (task.status is not TaskStatus.COMPLETED or is_completed_on(task, today, tz))
+        ),
+        key=lambda task: (task.status is TaskStatus.COMPLETED, *sort_key_for_report(task, today)),
+    )
+
+
 def build_context(
     tasks: Sequence[Task],
     summary: TaskSummary,
@@ -171,19 +193,7 @@ def build_context(
     local = now.astimezone(tz)
     today = local.date()
 
-    # Open tasks, plus whatever was finished today. A task completed on any
-    # earlier day is never listed -- with months of history in the task list,
-    # "top 15 by urgency" would otherwise be 15 long-closed tasks. Completed-
-    # today tasks sort after every open one.
-    ordered = sorted(
-        (
-            task
-            for task in tasks
-            if not task.is_deleted
-            and (task.status is not TaskStatus.COMPLETED or is_completed_on(task, today, tz))
-        ),
-        key=lambda task: (task.status is TaskStatus.COMPLETED, *sort_key_for_report(task, today)),
-    )
+    ordered = select_report_tasks(tasks, today=today, tz=tz)
 
     rendered_tasks = [
         {

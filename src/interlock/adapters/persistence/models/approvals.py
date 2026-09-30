@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, String, Text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, LargeBinary, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -73,6 +73,7 @@ class ReportSnapshotRow(Base):
     summary: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     template_id: Mapped[str] = mapped_column(String(100), nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(TIMESTAMPTZ, nullable=False)
+    rendered_image: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
 
 
 class ShareJobRow(Base):

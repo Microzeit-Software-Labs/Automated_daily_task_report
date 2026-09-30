@@ -81,6 +81,31 @@ class ReviewService:
             )
         return request, created
 
+    def create_manual(self, *, actor: Actor, now: dt.datetime) -> ApprovalRequest:
+        """"Share the list right now", outside 09:00 / 17:00. A MANUAL review
+        has no once-per-day guard, so this always creates a fresh row. It
+        still goes through the same approval gate as a scheduled one --
+        creating a review sends nothing."""
+        day = local_date(now, self._tz)
+        request, _created = self._approvals.create_scheduled(
+            kind=ApprovalKind.MANUAL, local_date=day, scheduled_for=now, now=now
+        )
+        self._audit.record(
+            action="REVIEW_CREATED",
+            entity_type="approval_request",
+            entity_id=request.id,
+            actor=str(actor),
+            actor_kind=actor.kind.value,
+            at=now,
+            after={"kind": ApprovalKind.MANUAL.value, "local_date": day.isoformat()},
+        )
+        return request
+
+    def list_recent(
+        self, *, limit: int = 20, day: dt.date | None = None
+    ) -> list[ApprovalRequest]:
+        return self._approvals.list_recent(limit=limit, local_date=day)
+
     def get(self, request_id: str) -> ApprovalRequest | None:
         return self._approvals.get(request_id)
 

@@ -22,6 +22,7 @@ MockWhatsAppProvider` already does:
 
 from __future__ import annotations
 
+import base64
 import dataclasses
 import datetime as dt
 import time
@@ -144,6 +145,7 @@ class LocalAgentProvider:
         external_jid: str,
         body: str,
         client_message_id: str,
+        image_png: bytes | None = None,
     ) -> SendOutcome:
         existing = self._with_repo(
             lambda repo: repo.get_done_by_client_message_id(client_message_id)
@@ -157,7 +159,7 @@ class LocalAgentProvider:
             lambda repo: repo.enqueue(
                 command_id=new_id(),
                 op="send_text",
-                payload={"external_jid": external_jid, "body": body},
+                payload=_send_payload(external_jid, body, image_png),
                 client_message_id=client_message_id,
                 now=now,
                 expires_at=expires_at,
@@ -247,3 +249,13 @@ def _candidates_from_result(result: dict[str, Any] | None) -> Sequence[GroupCand
         )
         for c in result.get("candidates", [])
     )
+
+
+def _send_payload(external_jid: str, body: str, image_png: bytes | None) -> dict[str, str]:
+    """The agent sends an image with ``body`` as its caption when
+    ``image_b64`` is present (apps/agent/src/commands.ts), plain text
+    otherwise."""
+    payload = {"external_jid": external_jid, "body": body}
+    if image_png is not None:
+        payload["image_b64"] = base64.b64encode(image_png).decode("ascii")
+    return payload

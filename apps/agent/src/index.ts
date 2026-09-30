@@ -19,6 +19,7 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 const POLL_INTERVAL_MS = 500;
 const CLAIM_MARGIN_SECONDS = 2;
 const WORKER_ID = `local-agent-${process.pid}`;
+const SHUTDOWN_GRACE_MS = 3_000;
 
 async function main(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL;
@@ -66,24 +67,40 @@ async function main(): Promise<void> {
 
   logger.info({ version: AGENT_VERSION, workerId: WORKER_ID }, "agent.started");
 
+  let stopping = false;
   process.on("SIGINT", () => shutdown(0));
   process.on("SIGTERM", () => shutdown(0));
 
   function shutdown(code: number): void {
+    if (stopping) {
+      return; // a second Ctrl+C while already stopping
+    }
+    stopping = true;
     logger.info("agent.stopping");
     clearInterval(heartbeatTimer);
     stopCanary();
+    wake?.();
+    // Backstop: whatever hangs, the process still exits.
+    setTimeout(() => process.exit(code), SHUTDOWN_GRACE_MS).unref();
+    try {
+      baileys.close();
+    } catch (err: unknown) {
+      logger.error({ err }, "baileys.close_failed");
+    }
     db.close()
       .catch((err: unknown) => logger.error({ err }, "db.close_failed"))
       .finally(() => process.exit(code));
   }
 
-  for (;;) {
+  while (!stopping) {
     const claimed = await db.claimNext(WORKER_ID, CLAIM_MARGIN_SECONDS).catch((err: unknown) => {
       logger.error({ err }, "claim_next.failed");
       return null;
     });
 
+    if (stopping) {
+      break;
+    }
     if (claimed) {
       await processCommand(claimed, { db, baileys, rateLimiter, breaker }).catch(
         (err: unknown) => logger.error({ err, commandId: claimed.id }, "command.crashed")

@@ -40,6 +40,7 @@ from interlock.domain.ports.repositories import AuditSink
 from interlock.domain.ports.whatsapp import ErrorClass, WhatsAppProvider
 from interlock.domain.scheduling.action import SEND_SHARE_JOB, ScheduledAction
 from interlock.domain.sharing.job import ShareJob, ShareRecipient
+from interlock.domain.sharing.snapshot import ReportSnapshot
 from interlock.domain.sharing.validity import Verdict, evaluate_send_validity
 
 WORKER_ACTOR = system_actor("worker")
@@ -240,7 +241,7 @@ class SchedulerService:
         sent = failed = 0
         for recipient in recipients:
             outcome = self._attempt_recipient(
-                recipient, now=now, snapshot_body=snapshot.rendered_body
+                recipient, now=now, snapshot=snapshot
             )
             if outcome is True:
                 sent += 1
@@ -256,7 +257,7 @@ class SchedulerService:
         recipient: ShareRecipient,
         *,
         now: dt.datetime,
-        snapshot_body: str | None = None,
+        snapshot: ReportSnapshot | None = None,
     ) -> bool | None:
         """Returns True (sent), False (failed permanently or exhausted
         retries), or None (claim lost / nothing to do -- not this caller's
@@ -283,14 +284,15 @@ class SchedulerService:
             )
             return None
 
-        if snapshot_body is None:
+        if snapshot is None:
             job = self._shares.get_job(recipient.share_job_id)
             snapshot = self._shares.get_snapshot(job.snapshot_id) if job else None
-            snapshot_body = snapshot.rendered_body if snapshot else ""
 
+        # The frozen bytes, text and image alike -- never a fresh render.
         outcome = self._whatsapp.send_text(
             external_jid=group.external_jid,
-            body=snapshot_body,
+            body=snapshot.rendered_body if snapshot else "",
+            image_png=snapshot.rendered_image if snapshot else None,
             client_message_id=recipient.client_message_id,
         )
 

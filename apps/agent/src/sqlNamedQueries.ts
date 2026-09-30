@@ -8,7 +8,10 @@
 import { readFileSync } from "node:fs";
 
 const NAME_HEADER = /^-- name:\s*(\w+)\s*$/;
-const PLACEHOLDER = /:(\w+)/g;
+// A ":" preceded by another ":" is a Postgres cast ("::interval", "::jsonb"),
+// never a parameter.
+const PLACEHOLDER = /(?<!:):(\w+)/g;
+const COMMENT_LINE = /^\s*--/;
 
 export function loadNamedQueries(sqlFileContents: string): Record<string, string> {
   const blocks: Record<string, string[]> = {};
@@ -21,7 +24,9 @@ export function loadNamedQueries(sqlFileContents: string): Record<string, string
       blocks[current] = [];
       continue;
     }
-    if (current !== null) {
+    // Comment lines are documentation, not SQL: dropping them keeps a
+    // ":name" or "::cast" mentioned in prose from being read as a parameter.
+    if (current !== null && !COMMENT_LINE.test(line)) {
       (blocks[current] as string[]).push(line);
     }
   }

@@ -147,6 +147,11 @@ class CommitRequest(BaseModel):
     send_at: dt.datetime | None = None
     template_id: str | None = None
     template_source: str | None = None
+    expected_content_hash: str | None = None
+    """The ``content_hash`` returned by ``/preview``. When given, the commit is
+    refused with ``DATASET_VERSION_CONFLICT`` if the task data has changed
+    since that preview -- so the text the user read is the text that goes
+    out."""
 
 
 class ShareRecipientOut(BaseModel):
@@ -213,6 +218,24 @@ class CommitResponse(BaseModel):
 
 class PreviewResponse(BaseModel):
     rendered_body: str
+    """The whole message in text format; the image's caption in image format."""
+    content_hash: str
+    has_image: bool = False
+    """When true, the report is sent as a table image: fetch it from
+    ``GET /approval-requests/{id}/preview.png``."""
+
+
+class ShareOut(BaseModel):
+    """One approved send and how it went, per group -- the review screen's
+    delivery panel."""
+
+    job: ShareJobOut
+    run_at: dt.datetime | None
+    rendered_body: str
+    snapshot_id: str
+    has_image: bool = False
+    """The frozen table image is at ``GET /shares/snapshots/{snapshot_id}/image.png``."""
+    recipients: list[ShareRecipientOut]
 
 
 class ApprovalRequestOut(BaseModel):
@@ -277,15 +300,30 @@ class ReviewDetailOut(BaseModel):
     tasks: list[TaskOut]
     summary: TaskSummaryOut
     changes_since_last_share: ChangeSummaryOut
+    shares: list[ShareOut] = Field(default_factory=list)
 
     @classmethod
-    def from_detail(cls, detail: ReviewDetail) -> ReviewDetailOut:
+    def from_detail(
+        cls, detail: ReviewDetail, shares: list[ShareOut] | None = None
+    ) -> ReviewDetailOut:
         return cls(
             request=ApprovalRequestOut.from_entity(detail.request),
             tasks=[TaskOut.from_entity(t) for t in detail.tasks],
             summary=TaskSummaryOut.from_entity(detail.summary),
             changes_since_last_share=ChangeSummaryOut.from_entity(detail.changes_since_last_share),
+            shares=shares or [],
         )
+
+
+class UiConfigOut(BaseModel):
+    """The few settings the browser UI needs to label things correctly."""
+
+    timezone: str
+    morning_alert_time: dt.time
+    evening_alert_time: dt.time
+    allow_custom_send_time: bool
+    sheet_url: str | None
+    user_name: str
 
 
 class WhatsAppGroupCreateRequest(BaseModel):

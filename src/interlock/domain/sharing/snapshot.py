@@ -89,6 +89,9 @@ class ReportSnapshot:
     summary: dict[str, int]
     template_id: str
     created_at: dt.datetime
+    rendered_image: bytes | None = None
+    """PNG of the report table, when the report is sent as an image. Frozen
+    with everything else: the bytes sent are the bytes that were approved."""
 
     @property
     def task_count(self) -> int:
@@ -116,6 +119,7 @@ def freeze(
     now: dt.datetime,
     tz: ZoneInfo,
     sequence: int,
+    rendered_image: bytes | None = None,
 ) -> ReportSnapshot:
     """Capture a report and the data behind it, permanently.
 
@@ -132,6 +136,7 @@ def freeze(
         summary=summary.as_dict(),
         template_id=template_id,
         created_at=now,
+        rendered_image=rendered_image,
     )
 
 

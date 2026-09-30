@@ -36,10 +36,12 @@ from interlock.domain.approvals.states import ApprovalState, ShareJobState
 from interlock.domain.common.actor import Actor
 from interlock.domain.common.clock import local_date
 from interlock.domain.common.errors import (
+    DatasetVersionConflictError,
     IllegalTransitionError,
     NoRecipientsSelectedError,
     NotFoundError,
 )
+from interlock.domain.ports.rendering import ReportImageRenderer
 from interlock.domain.ports.repositories import AuditSink, TaskRepository
 from interlock.domain.scheduling.action import SEND_SHARE_JOB
 from interlock.domain.sharing.job import ShareJob, ShareRecipient
@@ -49,7 +51,13 @@ from interlock.domain.sharing.render import (
     default_template_for,
     render_report,
 )
-from interlock.domain.sharing.snapshot import freeze
+from interlock.domain.sharing.snapshot import compute_content_hash, freeze
+from interlock.domain.sharing.table import (
+    TABLE_TEMPLATE_ID,
+    build_report_table,
+    render_caption,
+)
+from interlock.domain.tasks.entities import Task
 from interlock.domain.tasks.summary import summarize
 from interlock.services.task_service import BulkUpdateItem, TaskService
 
@@ -89,6 +97,18 @@ class CommitResult:
     -- either a cheap early-check hit or a resolved concurrent race."""
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class PreviewResult:
+    body: str
+    content_hash: str
+    has_image: bool
+    """Whether this report goes out as a table image, with ``body`` as its
+    caption. Fetch the image itself with ``SharingService.preview_image``."""
+    """Fingerprint of the task data behind ``body``. Hand it back to
+    ``commit`` as ``expected_content_hash`` to refuse a share whose data moved
+    after the user read the preview."""
+
+
 class SharingService:
     def __init__(
         self,
@@ -102,6 +122,7 @@ class SharingService:
         audit: AuditSink,
         tz: ZoneInfo,
         max_message_length: int,
+        image_renderer: ReportImageRenderer | None = None,
     ) -> None:
         self._approvals = approval_repo
         self._shares = share_repo
@@ -112,6 +133,7 @@ class SharingService:
         self._audit = audit
         self._tz = tz
         self._max_message_length = max_message_length
+        self._image_renderer = image_renderer
 
     def commit(
         self,
@@ -126,6 +148,7 @@ class SharingService:
         send_at: dt.datetime | None = None,
         template_id: str | None = None,
         template_source: str | None = None,
+        expected_content_hash: str | None = None,
     ) -> CommitResult:
         request = self._approvals.get(approval_request_id)
         if request is None:
@@ -157,6 +180,22 @@ class SharingService:
                 request_id=request.id,
                 state=request.state.value,
             )
+
+        # What you approved is what gets sent: the sheet import rewrites tasks
+        # every minute, so the data can move between the user reading the
+        # preview and pressing Share. The body itself can't be compared -- it
+        # carries the render time -- so compare the data fingerprint, before
+        # this commit's own edits change it.
+        if expected_content_hash is not None and mode.produces_a_share:
+            current_hash = compute_content_hash(self._tasks.list())
+            if current_hash != expected_content_hash:
+                raise DatasetVersionConflictError(
+                    "Your tasks changed since you previewed this report. Review the "
+                    "updated preview and share again.",
+                    request_id=request.id,
+                    expected_content_hash=expected_content_hash,
+                    current_content_hash=current_hash,
+                )
 
         # Apply task edits as one atomic step: any single conflict aborts the
         # whole commit (raises out of this method, rolling back the caller's
@@ -271,26 +310,71 @@ class SharingService:
         now: dt.datetime,
         template_id: str | None = None,
         template_source: str | None = None,
-    ) -> str:
+    ) -> PreviewResult:
         """Render without approving -- a pure function of current data, safe
         to call repeatedly as the user toggles recipients in the review
         sheet."""
-        request = self._approvals.get(approval_request_id)
-        if request is None:
-            raise NotFoundError(
-                f"Approval request {approval_request_id} does not exist.",
-                request_id=approval_request_id,
-            )
+        request = self._require(approval_request_id)
+        tasks = self._tasks.list()
+        body, _template_id, _image = self._render(
+            request.kind.value,
+            tasks,
+            now=now,
+            template_id=template_id,
+            template_source=template_source,
+            with_image=False,
+        )
+        return PreviewResult(
+            body=body,
+            content_hash=compute_content_hash(tasks),
+            has_image=self._image_renderer is not None and template_source is None,
+        )
+
+    def preview_image(self, approval_request_id: str, *, now: dt.datetime) -> bytes | None:
+        """The table image a commit right now would freeze, or None in text
+        format. Same data as ``preview``; the commit-time hash check covers
+        any change in between."""
+        if self._image_renderer is None:
+            return None
+        request = self._require(approval_request_id)
         tasks = self._tasks.list()
         today = local_date(now, self._tz)
         summary = summarize(tasks, today=today, tz=self._tz)
-        _default_id, default_source = default_template_for(request.kind.value)
-        source = template_source or default_source
-        title = REVIEW_TITLES.get(request.kind.value, "Task Update")
-        context = build_context(tasks, summary, now=now, tz=self._tz, title=title)
-        return render_report(source, context, max_length=self._max_message_length)
+        table = build_report_table(tasks, summary, kind=request.kind.value, now=now, tz=self._tz)
+        return self._image_renderer.render(table)
 
     # -- internals ------------------------------------------------------
+
+    def _render(
+        self,
+        kind: str,
+        tasks: Sequence[Task],
+        *,
+        now: dt.datetime,
+        template_id: str | None,
+        template_source: str | None,
+        with_image: bool,
+    ) -> tuple[str, str, bytes | None]:
+        """``(body, template_id, image)`` for the configured format. In image
+        format the body is the caption; a custom template_source still forces
+        the text format, since it is a text template."""
+        today = local_date(now, self._tz)
+        summary = summarize(tasks, today=today, tz=self._tz)
+
+        if self._image_renderer is not None and template_source is None:
+            caption = render_caption(summary, kind=kind, now=now, tz=self._tz)
+            image = None
+            if with_image:
+                table = build_report_table(tasks, summary, kind=kind, now=now, tz=self._tz)
+                image = self._image_renderer.render(table)
+            return caption, TABLE_TEMPLATE_ID, image
+
+        default_id, default_source = default_template_for(kind)
+        chosen_source = template_source or default_source
+        title = REVIEW_TITLES.get(kind, "Task Update")
+        context = build_context(tasks, summary, now=now, tz=self._tz, title=title)
+        body = render_report(chosen_source, context, max_length=self._max_message_length)
+        return body, template_id or default_id, None
 
     def _freeze_report(
         self,
@@ -302,29 +386,36 @@ class SharingService:
         template_source: str | None,
     ) -> tuple[str, str, int]:
         tasks = self._tasks.list()
-        today = local_date(now, self._tz)
-        summary = summarize(tasks, today=today, tz=self._tz)
-
-        default_id, default_source = default_template_for(request_kind)
-        chosen_id = template_id or default_id
-        chosen_source = template_source or default_source
-        title = REVIEW_TITLES.get(request_kind, "Task Update")
-
-        context = build_context(tasks, summary, now=now, tz=self._tz, title=title)
-        body = render_report(chosen_source, context, max_length=self._max_message_length)
-
+        body, chosen_id, image = self._render(
+            request_kind,
+            tasks,
+            now=now,
+            template_id=template_id,
+            template_source=template_source,
+            with_image=True,
+        )
         sequence = self._sequences.next("share")
         snapshot = freeze(
             tasks=tasks,
-            summary=summary,
+            summary=summarize(tasks, today=local_date(now, self._tz), tz=self._tz),
             rendered_body=body,
             template_id=chosen_id,
             now=now,
             tz=self._tz,
             sequence=sequence,
+            rendered_image=image,
         )
         self._shares.save_snapshot(snapshot, approval_request_id=approval_request_id)
         return body, snapshot.id, sequence
+
+    def _require(self, approval_request_id: str) -> ApprovalRequest:
+        request = self._approvals.get(approval_request_id)
+        if request is None:
+            raise NotFoundError(
+                f"Approval request {approval_request_id} does not exist.",
+                request_id=approval_request_id,
+            )
+        return request
 
     def _approve(self, request: ApprovalRequest, *, actor: Actor, now: dt.datetime) -> None:
         record = transition(

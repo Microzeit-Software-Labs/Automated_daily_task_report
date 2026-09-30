@@ -165,8 +165,12 @@ class WhatsAppProvider(Protocol):
         external_jid: str,
         body: str,
         client_message_id: str,
+        image_png: bytes | None = None,
     ) -> SendOutcome:
-        """Send ``body`` to one group. Must be idempotent on ``client_message_id``."""
+        """Send ``body`` to one group. Must be idempotent on ``client_message_id``.
+
+        With ``image_png``, the message is that picture and ``body`` is its
+        caption."""
         ...
 
     def delivery_state(self, client_message_id: str) -> SendOutcome | None:

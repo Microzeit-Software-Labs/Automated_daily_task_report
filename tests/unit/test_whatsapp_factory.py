@@ -15,8 +15,11 @@ from tests.conftest import BRIEF_EVENING
 
 
 class TestMock:
-    def test_defaults_to_the_mock(self) -> None:
-        settings = Settings()
+    def test_defaults_to_the_mock(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The code default, not whatever the developer's own .env says (a
+        # real install sets WHATSAPP_PROVIDER=local_agent there).
+        monkeypatch.delenv("WHATSAPP_PROVIDER", raising=False)
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
         provider = build_whatsapp_provider(
             settings, clock=FrozenClock(BRIEF_EVENING), session_factory=None  # type: ignore[arg-type]
         )

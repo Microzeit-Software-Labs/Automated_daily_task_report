@@ -64,6 +64,55 @@ test("toPositionalQuery does not confuse a name with an adjacent cast", () => {
   assert.deepEqual(values, ['{"a":1}']);
 });
 
+test("toPositionalQuery never reads a :: cast as a parameter", () => {
+  // The first real run of the agent failed every poll with
+  // 'missing parameter "interval"' because of exactly this.
+  const { text, values } = toPositionalQuery(
+    "SELECT now() + (:margin_seconds || ' seconds')::interval, :result::jsonb",
+    { margin_seconds: 2, result: "{}" }
+  );
+  assert.equal(text, "SELECT now() + ($1 || ' seconds')::interval, $2::jsonb");
+  assert.deepEqual(values, [2, "{}"]);
+});
+
+test("loadNamedQueries drops comment lines inside a block", () => {
+  const queries = loadNamedQueries(
+    "-- name: q\n-- mentions :result and \"::jsonb\" in prose\nSELECT :id;\n  -- indented note\n"
+  );
+  assert.equal(queries["q"], "SELECT :id;");
+});
+
+// Exactly the parameters db.ts passes for each statement. Converting every
+// real statement with them is what would have caught the "::interval" bug
+// before the agent ever ran.
+const DB_TS_PARAMS: Record<string, Record<string, unknown>> = {
+  claim_next: { claimed_by: "w", margin_seconds: 2 },
+  complete: { id: "c", result: "{}" },
+  release_transient: { id: "c" },
+  reset_stale_claims: {},
+  set_wa_message_id: { id: "c", wa_message_id: "m" },
+  upsert_status: {
+    state: "CONNECTED",
+    detail: "",
+    agent_version: "0.1.0",
+    last_successful_send_at: null,
+    last_canary_at: null,
+    last_canary_ok: null,
+  },
+};
+
+test("every real statement converts with exactly the parameters db.ts passes", () => {
+  const queries = loadNamedQueries(readFileSync(REAL_SQL_PATH, "utf-8"));
+  for (const [name, sql] of Object.entries(queries)) {
+    const params = DB_TS_PARAMS[name];
+    assert.ok(params, `no parameter fixture for "${name}"`);
+    const { text, values } = toPositionalQuery(sql, params);
+    assert.doesNotMatch(text, /(?<!:):[a-z_]+/, `"${name}" still has an unbound :name`);
+    assert.doesNotMatch(text, /^\s*--/m, `"${name}" still carries comment lines`);
+    assert.equal(values.length, Object.keys(params).length, `"${name}" uses every parameter once`);
+  }
+});
+
 test("toPositionalQuery raises on a parameter the caller forgot to pass", () => {
   assert.throws(() => toPositionalQuery("SELECT :missing", {}), /missing/);
 });

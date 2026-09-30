@@ -52,6 +52,21 @@ class ApprovalRepository:
         ).scalar_one_or_none()
         return None if row is None else _to_entity(row)
 
+    def list_recent(
+        self, *, limit: int = 20, local_date: dt.date | None = None
+    ) -> list[ApprovalRequest]:
+        """Newest first by ``scheduled_for`` -- what the dashboard lists. With
+        ``local_date``, only that day's reviews."""
+        query = select(ApprovalRequestRow)
+        if local_date is not None:
+            query = query.where(ApprovalRequestRow.local_date == local_date)
+        rows = self._session.execute(
+            query.order_by(
+                ApprovalRequestRow.scheduled_for.desc(), ApprovalRequestRow.display_id.desc()
+            ).limit(limit)
+        ).scalars()
+        return [_to_entity(row) for row in rows]
+
     def create_scheduled(
         self,
         *,

@@ -36,6 +36,7 @@ class SentMessage:
     body: str
     client_message_id: str
     at: dt.datetime
+    image_png: bytes | None = None
 
 
 @dataclasses.dataclass(slots=True)
@@ -174,6 +175,7 @@ class MockWhatsAppProvider:
         external_jid: str,
         body: str,
         client_message_id: str,
+        image_png: bytes | None = None,
     ) -> SendOutcome:
         self._send_attempts += 1
 
@@ -209,6 +211,7 @@ class MockWhatsAppProvider:
                 body=body,
                 client_message_id=client_message_id,
                 at=now,
+                image_png=image_png,
             )
         )
         self._last_success = now

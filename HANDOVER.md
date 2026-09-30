@@ -1,8 +1,8 @@
 # Interlock — Handover
 
 **Project root:** `C:\Users\Admin\Documents\interlock`
-**Repo state:** git on `main`, one commit (`9cd110b`), nothing pushed. **Everything in §10–§12 is uncommitted** — ask the user whether to commit before starting new work.
-**Phase status:** Phase 1 complete. Read-only sheet import (§12) **verified against the user's real sheet**. Two-way Sheets sync (§10) built but unused. Real WhatsApp (§11) built, **never run against a real account**. No frontend, no auth.
+**Repo state:** git on `main`, two commits, nothing pushed. §10–§12 are committed in `b4ff38e`. As of 29 Sep 2026 the tree is clean and the full §7 battery is green.
+**Phase status:** Phase 1 complete. Read-only sheet import (§12) **verified against the user's real sheet**. Two-way Sheets sync (§10) built but unused. Real WhatsApp (§11) built, **never run against a real account**. Review/approve UI built (§13). No auth.
 
 ---
 
@@ -36,11 +36,11 @@ WHATSAPP_LOCAL_AGENT_TOS_ACK=true
 ```
 
 **Next work, in order:**
-1. **First real end-to-end send.** Walk the user through steps 1–4, set the config, and start the worker and API (`.\.venv\Scripts\python.exe -m uvicorn interlock.api.main:app` and `-m interlock.workers.loop`). Pin the test group via `/docs` (`POST /whatsapp/groups/resolve`, then `POST /whatsapp/groups`), then approve a review via `/docs` (`POST /approval-requests/{id}/commit`).
+1. **First real end-to-end send.** Walk the user through steps 1–4, set the config, and build the UI once (`cd apps\web; npm install; npm run build`, see `docs/web-ui.md`). Then start the worker and the API (`.\.venv\Scripts\python.exe -m uvicorn interlock.api.main:app` and `-m interlock.workers.loop`). Open http://127.0.0.1:8000/. Under **Groups**, find and pin the test group. Under **Reports**, open today's report or press **Start a report now**, then **Share to 1 group**.
    - Watch the risk flagged in §11: the crash-resend WhatsApp-message-id dedup has never been verified.
    - `baileys.ts` has never run against real WhatsApp, so expect to debug it here.
-2. **Review/approve UI.** None exists; approving via `/docs` is the only way today. `docs/openapi.json` is the contract. This is the last piece for comfortable daily use.
-3. Commit everything once the user agrees.
+2. **Review/approve UI: built 30 Sep 2026 (§13).** It has never been clicked through by a human in a real browser; only headless screenshots and API-level runs so far. Watch the first real use for rough edges.
+3. Not committed yet: the UI work (§13) and the HANDOVER changes. Ask the user.
 
 **How this was built — keep doing it:**
 - Plan non-trivial work first (plan files live in `C:\Users\Admin\.claude\plans\`).
@@ -240,6 +240,8 @@ cd C:\Users\Admin\Documents\interlock
 .\.venv\Scripts\python.exe -m interlock.workers.loop
 ```
 
+**The web UI (`apps/web/`) is verified separately too:** `cd apps\web; npm test` runs `tsc --noEmit` plus vitest (18 tests); `npm run build` must succeed.
+
 **The Node agent (`apps/agent/`) is verified separately** — it's a different language and
 toolchain, not part of the Python suite above:
 
@@ -256,7 +258,6 @@ npm test    # tsc --strict, then node --test (29 tests: pure logic only, see §1
 
 - **Excel task source.** (Google Sheets is built — §10.) Note it was built as a *peer* synced by `SheetSyncService`, **not** as an alternate `TaskRepository` implementation as this section originally planned; Postgres remains the only `TaskRepository`.
 - **Official Cloud API WhatsApp provider.** (`local_agent`/Baileys is built — §11.) `WhatsAppProviderName.CLOUD_API` is reserved in `config.py` but `build_whatsapp_provider` raises `NotImplementedError` for it. Only useful for compliant 1:1 DMs or API-created groups (≤8 members) — see the Phase 0 doc's §8 before building it, the tradeoffs are the same ones that led to choosing Baileys first.
-- **Frontend.** Nothing exists. `docs/openapi.json` is the contract to build against.
 - **Real authentication.** Every request currently acts as one configured default user (`DEFAULT_USER_ID`/`DEFAULT_USER_NAME` in `.env`, resolved in `api/deps.py::get_current_actor`) with optional `X-Actor-Id`/`X-Actor-Name` header overrides. This is explicitly a placeholder — see the docstring in `config.py` on those settings fields.
 - **Holiday calendar**, **template editing UI**, **notification delivery** (native toast / web push) — all deferred per the Phase 0 MVP scope cut, not forgotten.
 
@@ -382,6 +383,11 @@ The setup doc's Scheduled Task pointed at `dist\index.js`; the entry point is `d
 
 The dynamic `import()` of Baileys was confirmed preserved in the compiled CJS, and confirmed to resolve at runtime on Node 22.11.
 
+**Found on the first real run (30 Sep 2026), now fixed:**
+- **Every claim failed with `missing parameter "interval"`.** `sqlNamedQueries.ts`'s placeholder regex `:(\w+)` also matched Postgres casts (`)::interval`). Comment lines were also sent as part of each statement, and `complete`'s comment mentions `::jsonb`, so the first completed send would have failed the same way. The regex is now `(?<!:):(\w+)`, and full-line `--` comments are dropped per block. `test/sqlNamedQueries.test.ts` now converts **every real statement** with exactly the params `db.ts` passes. The old test only checked that the file split into six blocks, which is why this got through.
+- **Ctrl+C never exited.** `pool.end()` waits for every checked-out client, and the LISTEN client was never released, so shutdown hung while the loop kept polling. On top of that, Baileys' close handler reconnected and printed a new QR code. Now `AgentDb.close()` releases the LISTEN client first, `BaileysAgent.close()` ends the socket without reconnecting (the pairing is kept), the loop stops, and a 3 s timer forces the exit regardless.
+- "QR refs attempts ended" (status 408) followed by a fresh QR is normal Baileys behaviour when a code isn't scanned in time. It isn't a bug.
+
 ---
 
 ## 12. Read-only sheet import — the task source actually in use
@@ -441,3 +447,50 @@ Nothing is ever written to the sheet. It shares the worker's sheet slot with the
 
 - Unit: `tests/unit/test_sheet_import_parsing.py` (the fixture mirrors the real sheet's quirks), `test_csv_source.py`, `test_sheet_import_factory.py`; new cases in `test_render_and_snapshot.py`.
 - Integration: `tests/integration/test_sheet_import_service.py` — historic timestamps, idempotence, edits audited, the Closed transition, hide/unhide, vanished rows, skips, a failed fetch changing nothing, and the read-only guard.
+
+---
+
+## 13. Review / approve UI
+
+**Status:** built 30 Sep 2026. The user chose **Vite + React** over Phase 0's Next.js: it's served by the API at `/app/`, so there's no extra process and no CORS. Usage and build: `docs/web-ui.md`.
+
+| Piece | Where |
+|---|---|
+| App | `apps/web/src/`: `App.tsx` (shell, WhatsApp status pill), `pages/{Dashboard,Review,Groups}.tsx`, `logic.ts` (pure, tested), `api.ts` (typed client) |
+| Types | `src/api-types.ts`, generated from `docs/openapi.json` (`npm run gen:api`); never hand-edit it |
+| Serving | `api/routers/ui.py`: `GET /config/ui`, static mount at `/app`, and `/` redirects to `/app/` (or `/docs` if not built) |
+| New endpoints | `GET /approval-requests` (list, `local_date`, `limit`), `POST /approval-requests` (MANUAL review), `shares[]` on `GET /approval-requests/{id}`, `content_hash` on `/preview`, `expected_content_hash` on `/commit` |
+| Tests | `tests/acceptance/test_review_ui_endpoints.py` (14), `apps/web/test/logic.test.ts` (18) |
+
+### Decisions worth knowing
+
+- **Preview/commit drift guard.** `/preview` returns `compute_content_hash(tasks)`, the same fingerprint snapshots use. `/commit` with `expected_content_hash` raises `DatasetVersionConflictError` (409) if the data moved. It's checked *before* the commit's own task edits and only for share modes. The rendered body can't be compared because it contains `{{ time }}`. The UI auto-refreshes the preview every 60 s, flags "Your tasks changed" when the hash moves, and re-previews on a 409.
+- **No task editing in the UI.** Tasks are sheet-owned (§12). The UI only sends `SHARE_ONLY`, or `UPDATE_ONLY` with no edits ("Don't share this one", which ends in `CLOSED_NO_SHARE`).
+- `action_version = shares.length + 1`, with a fresh `Idempotency-Key` per click. The backend's `(review, action_version)` uniqueness makes a double click send once.
+- Recipients preselect from `default_morning`, or from `default_evening` for EVENING and MANUAL reports (the same reasoning as `default_template_for`).
+- All times display in `Settings.timezone`, not the browser's zone (`logic.ts`). "Later today at" converts that wall time to UTC for `send_at`.
+- Hash routing (`#/review/<id>`), so a refresh never 404s against the static mount.
+- Desktop alerts use the browser Notification API: only while the tab is open, and never for reviews that already existed at page load.
+- **Pinned for Node 22.11:** Vite 6.4, plugin-react 4.7, TypeScript 5.9 (openapi-typescript needs TS 5), vitest 4.1.11 (3.x had a moderate advisory). `npm audit` is clean.
+
+### Known gaps, deliberately not fixed
+
+- A group's "preselect" flags can only be set when it's pinned; there's no endpoint to change them later.
+- Nothing in the UI resolves Sheets-sync conflicts (`/sync/conflicts`). Two-way sync is unused (§10).
+- There's no "share again" after a report is approved. The API allows a new `action_version`, but the UI shows delivery only.
+- Checked via headless Edge screenshots at 1100px and 520px wide, in dark theme. It hasn't been clicked through in a real browser yet.
+
+### Image-format reports (30 Sep 2026)
+
+The user found the emoji text report unprofessional. Reports now go out as a **sheet-style table image plus a one-line caption** (`REPORT_FORMAT=image`, the default; `text` keeps the old Jinja templates). There's deliberately **no colour coding**. Overdue is kept at the user's request, stated in words in the Deadline cell ("25 Sep 2026 (overdue)") and in the caption count.
+
+- **Content, pure:** `domain/sharing/table.py` has `build_report_table` and `render_caption`. It uses the same task selection as the text report (`render.select_report_tasks`). Columns are No. (the sheet's Sr No.), Task, Status, then Deadline and Note only when used. It caps at 40 rows and says "N more not shown".
+- **Drawing:** `adapters/rendering/table_image.py`, Pillow (a new dependency), Segoe UI falling back to Arial and then DejaVu. It's behind the `domain/ports/rendering.py` port and built once in `create_app`.
+- **Frozen:** `report_snapshots.rendered_image` (bytea, migration `e5c2a7d9b418`) is rendered at approval. The sender sends those exact bytes, and the acceptance test checks the sent PNG equals the served one.
+- **Send path:** `WhatsAppProvider.send_text(..., image_png=None)`. `LocalAgentProvider` adds `image_b64` to the outbox payload, and the agent sends `{image, caption: body}`.
+- **API:** `has_image` on `/preview`; `GET /approval-requests/{id}/preview.png` (live); `snapshot_id`/`has_image` on each share; `GET /shares/snapshots/{id}/image.png` (frozen). The UI shows the image in both the preview and delivery panels.
+- **Tests:** the nine scenarios pin `REPORT_FORMAT=text` in `tests/acceptance/conftest.py`. The image format has `tests/unit/test_report_table.py` and `tests/acceptance/test_image_reports.py`.
+- `test_whatsapp_factory.py::test_defaults_to_the_mock` now ignores the developer's `.env` (the real `.env` has `WHATSAPP_PROVIDER=local_agent`).
+- **Found while deploying:** two agent processes were running at once, one started by hand and one from the launcher. Exactly one must run. `start-interlock.ps1 -NoAgent` exists for when the agent is already up.
+- **Group sends never completed, found on the first real image sends (30 Sep 2026, now fixed).** For **group** chats, Baileys 7 never emits a `messages.update` status. The server's success ack produces no event at all, and group delivery receipts arrive per member on `message-receipt.update` (see `handleReceipt` in Baileys' `lib/Socket/messages-recv.js`). The agent waited only on `messages.update`, so every group send reached WhatsApp but stayed `CLAIMED`. Python timed out after 20 s, retried 4×, and marked the recipient `FAILED`. The same `client_message_id` meant those retries did **not** resend, but the user approved new reports four times thinking it had failed, so the groups got duplicates. Now `BaileysAgent` completes a send on whichever comes first: a `message-receipt.update` (DEVICE), a `messages.update` SERVER/DEVICE/READ, or `SERVER_ACCEPT_WINDOW_MS` (3 s) after `sendMessage` resolves with no ERROR. An ERROR inside that window still releases the row for retry. **Consequence:** the 5 jobs / 10 recipients from 30 Sep 12:50–13:00 are recorded `FAILED` but were actually delivered. Don't press Retry on them (a manual retry mints a new id and *would* resend).
+

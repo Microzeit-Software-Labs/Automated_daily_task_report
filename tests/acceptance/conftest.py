@@ -32,7 +32,7 @@ from interlock.adapters.persistence.whatsapp_group_repository import WhatsAppGro
 from interlock.adapters.sheets.fake import FakeSpreadsheetProvider
 from interlock.adapters.whatsapp.mock import MockWhatsAppProvider
 from interlock.api.main import create_app
-from interlock.config import Settings
+from interlock.config import ReportFormat, Settings
 from interlock.domain.common.clock import FrozenClock
 from interlock.services.review_service import ReviewService
 from interlock.services.review_trigger import TriggerResult, maybe_create_daily_reviews
@@ -51,7 +51,9 @@ def _test_settings() -> Settings:
     url = os.environ.get("TEST_DATABASE_URL")
     if not url:
         pytest.skip("TEST_DATABASE_URL is not set. Run scripts/setup-database.ps1 first.")
-    return Settings(database_url=url)
+    # The nine scenarios pin the text format (they assert on message text);
+    # the image format has its own tests in test_image_reports.py.
+    return Settings(database_url=url, report_format=ReportFormat.TEXT)
 
 
 @pytest.fixture(scope="session")

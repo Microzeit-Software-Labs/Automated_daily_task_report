@@ -26,6 +26,7 @@ from interlock.adapters.persistence.whatsapp_group_repository import WhatsAppGro
 from interlock.config import Settings
 from interlock.domain.common.actor import Actor, ActorKind
 from interlock.domain.common.clock import Clock
+from interlock.domain.ports.rendering import ReportImageRenderer
 from interlock.domain.ports.repositories import AuditSink, TaskRepository
 from interlock.domain.ports.sheets import SpreadsheetProvider
 from interlock.domain.ports.whatsapp import WhatsAppProvider
@@ -50,6 +51,10 @@ def get_whatsapp(request: Request) -> WhatsAppProvider:
 
 def get_sheets(request: Request) -> SpreadsheetProvider:
     return request.app.state.sheets  # type: ignore[no-any-return]
+
+
+def get_image_renderer(request: Request) -> ReportImageRenderer | None:
+    return request.app.state.image_renderer  # type: ignore[no-any-return]
 
 
 def get_session(request: Request) -> Iterator[Session]:
@@ -159,6 +164,7 @@ def get_sharing_service(
     task_repo: TaskRepository = Depends(get_task_repo),
     audit: AuditSink = Depends(get_audit),
     settings: Settings = Depends(get_settings_dep),
+    image_renderer: ReportImageRenderer | None = Depends(get_image_renderer),
 ) -> SharingService:
     return SharingService(
         approval_repo=approval_repo,
@@ -170,6 +176,7 @@ def get_sharing_service(
         audit=audit,
         tz=settings.tz,
         max_message_length=settings.max_message_length,
+        image_renderer=image_renderer,
     )
 
 

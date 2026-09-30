@@ -11,12 +11,13 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from interlock.adapters.persistence.base import make_engine, make_session_factory
+from interlock.adapters.rendering.table_image import PillowTableRenderer
 from interlock.adapters.sheets.factory import build_sheets_provider
 from interlock.adapters.whatsapp.factory import build_whatsapp_provider
 from interlock.api.errors import register_error_handlers
 from interlock.api.idempotency import IdempotencyMiddleware
-from interlock.api.routers import approvals, health, shares, sync, tasks, whatsapp
-from interlock.config import Settings, get_settings
+from interlock.api.routers import approvals, health, shares, sync, tasks, ui, whatsapp
+from interlock.config import ReportFormat, Settings, get_settings
 from interlock.domain.common.clock import Clock, SystemClock
 from interlock.domain.ports.sheets import SpreadsheetProvider
 from interlock.domain.ports.whatsapp import WhatsAppProvider
@@ -50,6 +51,10 @@ def create_app(
     app.state.clock = clock
     app.state.whatsapp = whatsapp_provider
     app.state.sheets = sheets_provider
+    # Fonts load once here, not per request.
+    app.state.image_renderer = (
+        PillowTableRenderer() if settings.report_format is ReportFormat.IMAGE else None
+    )
 
     # Starlette 1.6.0's _MiddlewareFactory Protocol checks add_middleware's
     # callable shape structurally against a bare ASGI callable and does not
@@ -71,6 +76,8 @@ def create_app(
     app.include_router(whatsapp.router)
     app.include_router(shares.router)
     app.include_router(sync.router)
+    app.include_router(ui.router)
+    ui.mount_web_app(app)
 
     return app
 

@@ -37,6 +37,7 @@ export interface AgentStatusUpdate {
 export class AgentDb {
   private readonly pool: Pool;
   private readonly queries: Record<string, string>;
+  private listenClient: PoolClient | null = null;
 
   constructor(connectionString: string) {
     this.pool = new Pool({ connectionString });
@@ -118,10 +119,15 @@ export class AgentDb {
     const client = await this.pool.connect();
     await client.query(`LISTEN ${NOTIFY_CHANNEL}`);
     client.on("notification", () => onNotify());
+    this.listenClient = client;
     return client;
   }
 
+  /** pool.end() waits for every checked-out client, so the LISTEN client
+   * must be released first or shutdown hangs forever. */
   async close(): Promise<void> {
+    this.listenClient?.release();
+    this.listenClient = null;
     await this.pool.end();
   }
 }

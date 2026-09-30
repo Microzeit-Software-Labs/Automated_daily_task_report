@@ -30,6 +30,13 @@ class WhatsAppProviderName(StrEnum):
     CLOUD_API = "cloud_api"
 
 
+class ReportFormat(StrEnum):
+    IMAGE = "image"
+    """A sheet-style table picture plus a one-line caption (the default)."""
+    TEXT = "text"
+    """The Jinja text templates in domain/sharing/render.py."""
+
+
 class SheetsProviderName(StrEnum):
     MOCK = "mock"
     GOOGLE = "google"
@@ -80,6 +87,7 @@ class Settings(BaseSettings):
     task_source: TaskSource = TaskSource.DATABASE
     whatsapp_provider: WhatsAppProviderName = WhatsAppProviderName.MOCK
     max_message_length: int = 4096
+    report_format: ReportFormat = ReportFormat.IMAGE
 
     # --- WhatsApp local agent (Phase 3) ------------------------------------
     # local_agent talks to a separate Node.js process (apps/agent/) over a

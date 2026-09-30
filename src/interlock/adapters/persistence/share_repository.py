@@ -47,6 +47,7 @@ class ShareRepository:
                 summary=dict(snapshot.summary),
                 template_id=snapshot.template_id,
                 created_at=snapshot.created_at,
+                rendered_image=snapshot.rendered_image,
             )
         )
         self._session.flush()
@@ -144,6 +145,16 @@ class ShareRepository:
             select(ShareJobRow).where(ShareJobRow.display_id == display_id)
         ).scalar_one_or_none()
         return None if row is None else _job_to_entity(row)
+
+    def list_jobs_for_review(self, approval_request_id: str) -> list[ShareJob]:
+        """Every job this review produced, oldest ``action_version`` first --
+        what the review screen's delivery panel shows."""
+        rows = self._session.execute(
+            select(ShareJobRow)
+            .where(ShareJobRow.approval_request_id == approval_request_id)
+            .order_by(ShareJobRow.action_version)
+        ).scalars()
+        return [_job_to_entity(row) for row in rows]
 
     def latest_approved_job_for_review(self, approval_request_id: str) -> ShareJob | None:
         """The highest ``action_version`` job for this review, if any --
@@ -359,6 +370,7 @@ def _snapshot_to_entity(row: ReportSnapshotRow) -> ReportSnapshot:
         summary=dict(row.summary),
         template_id=row.template_id,
         created_at=row.created_at,
+        rendered_image=row.rendered_image,
     )
 
 
