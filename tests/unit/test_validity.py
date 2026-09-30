@@ -63,6 +63,58 @@ class TestSends:
         assert decision.verdict is Verdict.SEND
 
 
+class TestScheduledForLater:
+    """A deliberate "send later": judged from the time it was meant to go out,
+    not from its approval (Scenario 5's 17:00 approval, 21:30 send)."""
+
+    APPROVED = dt.datetime(2026, 9, 15, 17, 0, tzinfo=IST)
+
+    def test_sends_at_its_scheduled_time_hours_after_approval(self) -> None:
+        run_at = dt.datetime(2026, 9, 15, 21, 30, tzinfo=IST)
+        decision = evaluate(snapshot_created_at=self.APPROVED, run_at=run_at, now=run_at)
+        assert decision.verdict is Verdict.SEND
+
+    def test_grace_counts_from_the_scheduled_time(self) -> None:
+        run_at = dt.datetime(2026, 9, 15, 21, 30, tzinfo=IST)
+        on_edge = evaluate(snapshot_created_at=self.APPROVED, run_at=run_at, now=run_at + GRACE)
+        assert on_edge.verdict is Verdict.SEND
+
+        too_late = evaluate(
+            snapshot_created_at=self.APPROVED,
+            run_at=run_at,
+            now=run_at + GRACE + dt.timedelta(seconds=1),
+        )
+        assert too_late.verdict is Verdict.DEFER
+        assert too_late.reason is DeferReason.SNAPSHOT_STALE
+
+    def test_scheduled_for_tomorrow_sends_tomorrow(self) -> None:
+        run_at = dt.datetime(2026, 9, 16, 9, 0, tzinfo=IST)
+        decision = evaluate(snapshot_created_at=self.APPROVED, run_at=run_at, now=run_at)
+        assert decision.verdict is Verdict.SEND
+
+    def test_scheduled_for_tomorrow_never_sends_the_day_after(self) -> None:
+        run_at = dt.datetime(2026, 9, 16, 23, 50, tzinfo=IST)
+        day_after = dt.datetime(2026, 9, 17, 0, 10, tzinfo=IST)
+        decision = evaluate(snapshot_created_at=self.APPROVED, run_at=run_at, now=day_after)
+        assert decision.verdict is Verdict.DEFER
+        assert decision.reason is DeferReason.CROSSED_DAY_BOUNDARY
+
+    def test_run_at_before_approval_is_judged_from_approval(self) -> None:
+        """A run_at in the past (clock skew, or "now" computed a moment
+        early) must not make a fresh approval look late."""
+        run_at = self.APPROVED - dt.timedelta(hours=3)
+        decision = evaluate(
+            snapshot_created_at=self.APPROVED,
+            run_at=run_at,
+            now=self.APPROVED + dt.timedelta(minutes=5),
+        )
+        assert decision.verdict is Verdict.SEND
+
+    def test_naive_run_at_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="timezone-aware"):
+            evaluate(run_at=dt.datetime(2026, 9, 15, 21, 30))  # noqa: DTZ001
+
+
 class TestDefers:
     def test_beyond_grace_defers_as_stale(self) -> None:
         approved = dt.datetime(2026, 9, 15, 17, 4, tzinfo=IST)

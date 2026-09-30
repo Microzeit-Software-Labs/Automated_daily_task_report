@@ -41,9 +41,19 @@ from interlock.domain.ports.whatsapp import ErrorClass, WhatsAppProvider
 from interlock.domain.scheduling.action import SEND_SHARE_JOB, ScheduledAction
 from interlock.domain.sharing.job import ShareJob, ShareRecipient
 from interlock.domain.sharing.snapshot import ReportSnapshot
-from interlock.domain.sharing.validity import Verdict, evaluate_send_validity
+from interlock.domain.sharing.validity import (
+    DeferReason,
+    Verdict,
+    evaluate_send_validity,
+    missed_its_day,
+)
 
 WORKER_ACTOR = system_actor("worker")
+
+# Kept in scheduled_actions.last_error when a due action is handed back
+# because WhatsApp could not send. If that action is later judged too late,
+# this is what lets the hold-back say "WhatsApp was down" instead of "stale".
+WAITING_FOR_WHATSAPP = "waiting_for_whatsapp"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -96,14 +106,23 @@ class SchedulerService:
             lease=self._claim_lease,
             batch_size=self._claim_batch_size,
         )
+        # Asked once per tick: while WhatsApp can't send, due reports wait
+        # (re-judged every tick) instead of burning their retry attempts on
+        # 20-second timeouts that cannot succeed.
+        can_send = self._whatsapp.health().can_send
+
         sent = failed = 0
         for action in claimed:
-            outcome = self._dispatch(action, now=now)
+            outcome = self._dispatch(action, now=now, can_send=can_send)
             sent += outcome[0]
             failed += outcome[1]
 
-        due_retries = self._shares.list_due_retry_recipients(now=now)
+        due_retries = self._shares.list_due_retry_recipients(now=now) if can_send else []
         for recipient in due_retries:
+            if self._enforce_day_boundary and self._retry_missed_its_day(recipient, now=now):
+                failed += 1
+                self._reroll_job(recipient.share_job_id, now=now)
+                continue
             retry_outcome = self._attempt_recipient(recipient, now=now)
             if retry_outcome is True:
                 sent += 1
@@ -161,7 +180,9 @@ class SchedulerService:
 
     # -- internals ------------------------------------------------------
 
-    def _dispatch(self, action: ScheduledAction, *, now: dt.datetime) -> tuple[int, int]:
+    def _dispatch(
+        self, action: ScheduledAction, *, now: dt.datetime, can_send: bool = True
+    ) -> tuple[int, int]:
         if action.kind != SEND_SHARE_JOB:
             self._scheduler.mark_failed(
                 action.id, error=f"unknown scheduled action kind: {action.kind}", now=now
@@ -194,7 +215,15 @@ class SchedulerService:
             enforce_day_boundary=self._enforce_day_boundary,
             strict_data_drift=self._strict_data_drift,
             superseded_by=superseded_by,
+            run_at=action.run_at,
         )
+        if (
+            decision.verdict is Verdict.DEFER
+            and (not can_send or action.last_error == WAITING_FOR_WHATSAPP)
+            and decision.reason in {DeferReason.CROSSED_DAY_BOUNDARY, DeferReason.SNAPSHOT_STALE}
+        ):
+            # Too late *because* WhatsApp was down when it came due -- say so.
+            decision = dataclasses.replace(decision, reason=DeferReason.WHATSAPP_DISCONNECTED)
 
         if decision.verdict is Verdict.DROP:
             self._scheduler.mark_done(action.id, now=now)
@@ -232,6 +261,16 @@ class SchedulerService:
                 now=now,
             )
             self._scheduler.mark_done(action.id, now=now)
+            return (0, 0)
+
+        if not can_send:
+            # Still valid, but WhatsApp is down: hand the action back
+            # untouched -- same run_at, so the grace window keeps counting
+            # from the intended time -- and judge it again next tick. It goes
+            # out as soon as WhatsApp reconnects, or is held back once too late.
+            self._scheduler.reschedule(
+                action.id, run_at=action.run_at, now=now, note=WAITING_FOR_WHATSAPP
+            )
             return (0, 0)
 
         # SEND
@@ -365,6 +404,47 @@ class SchedulerService:
             after={"error": outcome.error_code, "detail": outcome.error_detail},
         )
         return False
+
+    def _retry_missed_its_day(self, recipient: ShareRecipient, *, now: dt.datetime) -> bool:
+        """Fail an automatic retry whose report's day has ended, rather than
+        deliver yesterday's report after a long outage. True if it did."""
+        job = self._shares.get_job(recipient.share_job_id)
+        snapshot = self._shares.get_snapshot(job.snapshot_id) if job else None
+        if job is None or snapshot is None:
+            return False
+        action = self._scheduler.get(job.scheduled_action_id)
+        if not missed_its_day(
+            snapshot_created_at=snapshot.created_at,
+            run_at=action.run_at if action else None,
+            now=now,
+            tz=self._tz,
+        ):
+            return False
+
+        # QUEUED -> SENDING -> FAILED, the same legal path a real attempt
+        # takes (QUEUED -> FAILED is not an edge). Losing the claim means
+        # another worker has it; either way this one must not send it.
+        if not self._shares.claim_recipient_for_sending(recipient.id, now=now):
+            return True
+        detail = "Not sent: its day ended before WhatsApp could deliver it."
+        self._shares.save_recipient_outcome(
+            recipient.id,
+            state=RecipientState.FAILED,
+            now=now,
+            attempts=recipient.attempts,
+            error_code="MISSED_DAY",
+            error_detail=detail,
+        )
+        self._audit.record(
+            action="RECIPIENT_FAILED",
+            entity_type="share_recipient",
+            entity_id=recipient.id,
+            actor=str(WORKER_ACTOR),
+            actor_kind=WORKER_ACTOR.kind.value,
+            at=now,
+            after={"error": "MISSED_DAY", "detail": detail},
+        )
+        return True
 
     def _reroll_job(self, job_id: str, *, now: dt.datetime) -> None:
         job = self._shares.get_job(job_id)

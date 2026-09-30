@@ -20,8 +20,13 @@ from tests.acceptance.conftest import EVENING, _test_settings, run_tick, trigger
 
 
 def test_custom_time_send_survives_a_full_restart(
-    client: TestClient, whatsapp: MockWhatsAppProvider
+    client: TestClient, clock: FrozenClock, whatsapp: MockWhatsAppProvider
 ) -> None:
+    # Approval happens at 17:00, four and a half hours before the 21:30 send.
+    # Without this the API's clock sits at its default (22:30), *after* the
+    # send time, and the test never exercises "approved long before it is due"
+    # -- which the missed-window rule once held back as stale.
+    clock.set_to(EVENING)
     group = client.post(
         "/whatsapp/groups",
         json={"display_name": "SI Team", "external_jid": "si-team@g.us"},

@@ -107,12 +107,24 @@ class SchedulerRepository:
     def mark_cancelled(self, action_id: str, *, now: dt.datetime) -> None:
         self._set_status(action_id, ActionStatus.CANCELLED, now=now)
 
-    def reschedule(self, action_id: str, *, run_at: dt.datetime, now: dt.datetime) -> None:
+    def reschedule(
+        self,
+        action_id: str,
+        *,
+        run_at: dt.datetime,
+        now: dt.datetime,
+        note: str | None = None,
+    ) -> None:
+        """Hand a claimed action back to PENDING at ``run_at``. ``note`` is
+        kept in ``last_error`` so a later tick can tell *why* it was handed
+        back (e.g. the scheduler's "waiting for WhatsApp")."""
         row = self._session.get(ScheduledActionRow, action_id)
         if row is None:
             raise NotFoundError(
                 f"Scheduled action {action_id} does not exist.", action_id=action_id
             )
+        if note is not None:
+            row.last_error = note
         row.run_at = run_at
         row.status = ActionStatus.PENDING.value
         row.claimed_at = None
