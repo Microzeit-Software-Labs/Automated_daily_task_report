@@ -28,3 +28,6 @@ apps/agent/logs/
 # OS
 Thumbs.db
 desktop.ini
+
+# Background service logs
+logs/

@@ -119,27 +119,35 @@ POST /whatsapp/groups   {"external_jid": "...", "display_name": "SI Team", ...}
 The JID is pinned permanently once added — a later group rename never silently redirects
 where reports go.
 
-## 6. Run it day to day: a Scheduled Task
+## 6. Run it day to day: the background service
 
-Don't leave a terminal window open. Register it to start at login and restart itself if
-it crashes:
+Don't leave terminal windows open. Interlock runs as one hidden **supervisor** process
+(`src/interlock/supervisor.py`) that starts the API, the worker **and this agent**, and
+restarts any of them that stops (waiting 2 s, then 4 s ... up to 60 s between attempts,
+so a broken one can't spin):
 
 ```powershell
-$action = New-ScheduledTaskAction -Execute "node.exe" `
-    -Argument "dist\src\index.js" -WorkingDirectory "C:\Users\Admin\Documents\interlock\apps\agent"
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-$settings = New-ScheduledTaskSettingsSet `
-    -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
-Register-ScheduledTask -TaskName "Interlock WhatsApp Agent" `
-    -Action $action -Trigger $trigger -Settings $settings `
-    -Description "Baileys WhatsApp linked-device agent for Interlock"
+.\scripts\start-interlock.ps1              # start it (no windows), open the UI
+.\scripts\start-interlock.ps1 -Status      # what's running; is WhatsApp connected?
+.\scripts\start-interlock.ps1 -Restart     # after changing code
+.\scripts\start-interlock.ps1 -Stop
+.\scripts\register-autostart.ps1           # start it by itself when you log in
 ```
 
-Build first (`npm run build`, inside `apps\agent`) so `dist\src\index.js` exists — the task
-runs the compiled output, not `ts-node`. **`-MultipleInstances IgnoreNew` is not
-optional**: two agent processes sharing one `.wa-session` folder will corrupt it or get
-the linked device kicked by WhatsApp. Logs go to `apps\agent\logs\agent.log`, not the
-console — there's no terminal to read once this runs headless under Task Scheduler.
+Build the agent first (`npm run build`, inside `apps\agent`) so `dist\src\index.js`
+exists: the service runs the compiled output, not `ts-node`.
+
+**Exactly one agent may run**: two processes sharing one WhatsApp session will corrupt it
+or get the linked device kicked by WhatsApp. Three things enforce that: the supervisor
+holds a lock (a second one exits at once), the agent takes its own Postgres advisory lock
+(a second agent exits with code 3), and on every start the supervisor stops any child an
+earlier, hard-killed supervisor left behind. **Don't also register the old per-agent
+"Interlock WhatsApp Agent" task** that earlier versions of this page described;
+`register-autostart.ps1` removes it if it finds it.
+
+Logs are in `logs\` at the project root: `agent.log` (the agent's output), `api.log`,
+`worker.log` and `supervisor.log` (starts, stops and restarts), each rotated at about 2 MB.
+The agent also keeps its own structured log in `apps\agent\logs\agent.log`.
 
 ## How it works
 
