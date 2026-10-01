@@ -42,14 +42,33 @@ export interface AgentStatusUpdate {
   lastCanaryOk: boolean | null;
 }
 
+/** What AgentDb needs from a pool (so a test can stand in for it). */
+type PoolLike = Pick<Pool, "connect" | "query" | "end" | "on">;
+
+/** Told when a database connection dies, so the caller decides what that means.
+ * Without a listener, pg turns every such error into an uncaught exception. */
+export interface ConnectionWatch {
+  /** The connection holding the one-agent lock is gone, and with it the lock.
+   * The agent must not carry on as if it still held it. */
+  onLockLost(err: Error): void;
+  /** A connection died that the agent can do without: an idle pooled one (the
+   * pool opens another when needed) or the LISTEN one (the poll loop covers). */
+  onNonFatalError(err: Error, what: "idle" | "listen"): void;
+}
+
 export class AgentDb implements PairingStore {
-  private readonly pool: Pool;
+  private readonly pool: PoolLike;
   private readonly queries: Record<string, string>;
+  private readonly watch: ConnectionWatch | undefined;
   private listenClient: PoolClient | null = null;
   private lockClient: PoolClient | null = null;
 
-  constructor(connectionString: string) {
-    this.pool = new Pool({ connectionString });
+  constructor(connectionString: string, watch?: ConnectionWatch, pool?: PoolLike) {
+    this.pool = pool ?? new Pool({ connectionString });
+    this.watch = watch;
+    // pool.on("error") is how pg reports a dead *idle* connection. The pool has
+    // already discarded it; with no listener the error would kill the process.
+    this.pool.on("error", (err: Error) => this.watch?.onNonFatalError(err, "idle"));
     this.queries = loadNamedQueries(readFileSync(SQL_PATH, "utf-8"));
   }
 
@@ -76,11 +95,20 @@ export class AgentDb implements PairingStore {
    * reset_stale_claims, which would otherwise steal a live peer's work). */
   async acquireInstanceLock(): Promise<boolean> {
     const client = await this.pool.connect();
+    // The lock is tied to this one connection. If it drops (PostgreSQL restarted,
+    // say) the lock is released, so tell the caller; only while we hold the lock.
+    const onError = (err: Error): void => {
+      if (this.lockClient === client) {
+        this.watch?.onLockLost(err);
+      }
+    };
+    client.on("error", onError);
     const { rows } = await client.query<{ ok: boolean }>(
       "SELECT pg_try_advisory_lock($1, $2) AS ok",
       [...INSTANCE_LOCK]
     );
     if (!rows[0]?.ok) {
+      client.removeListener("error", onError);
       client.release();
       return false;
     }
@@ -166,7 +194,24 @@ export class AgentDb implements PairingStore {
    * only path to progress. */
   async listenForCommands(onNotify: () => void): Promise<PoolClient> {
     const client = await this.pool.connect();
-    await client.query(`LISTEN ${NOTIFY_CHANNEL}`);
+    // If this connection dies, drop it and carry on: the loop's fixed poll
+    // finds new commands anyway, just up to POLL_INTERVAL_MS later. Releasing it
+    // *with the error* makes the pool destroy it instead of handing it out again.
+    client.on("error", (err: Error) => {
+      if (this.listenClient !== client) {
+        return;
+      }
+      this.listenClient = null;
+      client.release(err);
+      this.watch?.onNonFatalError(err, "listen");
+    });
+    try {
+      await client.query(`LISTEN ${NOTIFY_CHANNEL}`);
+    } catch (err: unknown) {
+      // Don't leave it checked out: pool.end() would wait for it at shutdown.
+      client.release(err instanceof Error ? err : true);
+      throw err;
+    }
     client.on("notification", () => onNotify());
     this.listenClient = client;
     return client;
@@ -175,16 +220,21 @@ export class AgentDb implements PairingStore {
   /** pool.end() waits for every checked-out client, so the LISTEN client
    * must be released first or shutdown hangs forever. */
   async close(): Promise<void> {
-    this.listenClient?.release();
+    const listenClient = this.listenClient;
     this.listenClient = null;
-    if (this.lockClient) {
+    listenClient?.release();
+    const lockClient = this.lockClient;
+    if (lockClient) {
+      // Clearing this stops its error listener (which stays attached, so a late
+      // error during shutdown is still handled) from reporting "lock lost":
+      // we are letting go on purpose.
+      this.lockClient = null;
       // Unlock explicitly (release() alone returns the connection to the pool
       // with the session-level lock still held), then let go of it.
-      await this.lockClient
+      await lockClient
         .query("SELECT pg_advisory_unlock($1, $2)", [...INSTANCE_LOCK])
         .catch(() => undefined);
-      this.lockClient.release();
-      this.lockClient = null;
+      lockClient.release();
     }
     await this.pool.end();
   }

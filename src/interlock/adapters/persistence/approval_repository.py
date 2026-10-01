@@ -96,6 +96,16 @@ class ApprovalRepository:
         A MANUAL review never collides here: it has no uniqueness constraint
         to hit, so it always creates a fresh row.
         """
+        if kind.is_scheduled:
+            # The usual case, on every tick after the alert time: the review
+            # exists already. Look first, so no review number is drawn for a
+            # row that cannot be inserted (the numbers on screen used to jump)
+            # and Postgres does not log a duplicate-key error every tick. The
+            # savepoint below stays as the backstop for a genuine race.
+            existing = self.get_scheduled_for_day(kind, local_date)
+            if existing is not None:
+                return existing, False
+
         candidate = ApprovalRequestRow(
             id=new_id(),
             display_id=format_display_id(

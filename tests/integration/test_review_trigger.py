@@ -83,6 +83,32 @@ class TestIdempotency:
         assert not third[0].newly_created
         assert first[0].request.id == second[0].request.id == third[0].request.id
 
+    def test_repeating_the_trigger_does_not_use_up_review_numbers(
+        self, db_session: Session
+    ) -> None:
+        """Every tick after an alert time used to draw a review number, then
+        lose the insert to the review that already existed, so the numbers on
+        screen jumped (REV-00482 -> REV-00861 -> REV-01397 for 18 reviews) and
+        Postgres logged a duplicate-key error each time. The next review made
+        after any number of idle ticks must be the very next number."""
+        service = make_service(db_session)
+        first = trigger(service, AFTER_MORNING)[0].request
+        for minutes in range(1, 6):
+            trigger(service, AFTER_MORNING + dt.timedelta(minutes=minutes))
+
+        manual, created = ApprovalRepository(db_session).create_scheduled(
+            kind=ApprovalKind.MANUAL,
+            local_date=dt.date(2026, 9, 15),
+            scheduled_for=AFTER_MORNING,
+            now=AFTER_MORNING,
+        )
+
+        def number(display_id: str) -> int:
+            return int(display_id.rsplit("-", 1)[1])
+
+        assert created
+        assert number(manual.display_id) == number(first.display_id) + 1
+
 
 class TestWorkingDays:
     def test_nothing_is_created_on_a_non_working_day(self, db_session: Session) -> None:

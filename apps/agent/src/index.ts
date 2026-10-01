@@ -39,7 +39,28 @@ async function main(): Promise<void> {
     );
   }
 
-  const db = new AgentDb(databaseUrl);
+  let stopping = false;
+
+  const db = new AgentDb(databaseUrl, {
+    onLockLost: (err) => {
+      if (stopping) {
+        return;
+      }
+      // The one-agent lock lived on that connection and is now released, so
+      // carrying on could let a second agent start beside this one. Restarting is
+      // the safe answer (the supervisor does it within seconds): do it on purpose,
+      // and say why, instead of dying on an uncaught exception.
+      logger.fatal({ err }, "db.lock_connection_lost -- exiting so the supervisor restarts the agent");
+      process.exit(1);
+    },
+    onNonFatalError: (err, what) =>
+      logger.warn(
+        { err },
+        what === "listen"
+          ? "listen.connection_lost -- relying on the fallback poll only"
+          : "db.idle_connection_error -- the pool will replace it"
+      ),
+  });
 
   // Before anything that assumes it is the only agent. reset_stale_claims
   // below would otherwise steal a live peer's in-flight work.
@@ -128,7 +149,6 @@ async function main(): Promise<void> {
 
   logger.info({ version: AGENT_VERSION, workerId: WORKER_ID }, "agent.started");
 
-  let stopping = false;
   process.on("SIGINT", () => shutdown(0));
   process.on("SIGTERM", () => shutdown(0));
 
