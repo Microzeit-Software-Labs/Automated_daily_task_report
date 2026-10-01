@@ -23,6 +23,7 @@ from interlock.domain.approvals.states import ApprovalState, RecipientState, Sha
 from interlock.domain.ports.whatsapp import LinkStatus, PairingState, ProviderStatus, phone_from_jid
 from interlock.domain.sharing.group import WhatsAppGroup
 from interlock.domain.sharing.job import ShareJob, ShareRecipient
+from interlock.domain.sharing.summary import DeliverySummary
 from interlock.domain.sync.reconciliation import ConflictResolution, SyncConflict
 from interlock.domain.tasks.entities import Priority, Task, TaskSourceKind, TaskStatus
 from interlock.domain.tasks.summary import ChangeSummary, TaskSummary
@@ -278,6 +279,44 @@ class ApprovalRequestOut(BaseModel):
         )
 
 
+class DeliverySummaryOut(BaseModel):
+    """How the latest send for a review went, in numbers. The Reports list
+    turns it into words ("Sent to 3 groups", "Partly sent 2/3", ...)."""
+
+    job_state: ShareJobState
+    run_at: dt.datetime | None
+    sent_at: dt.datetime | None
+    deferred_reason: str | None
+    total: int
+    sent: int
+    failed: int
+    pending: int
+    skipped: int
+    group_names: list[str]
+
+    @classmethod
+    def from_entity(cls, summary: DeliverySummary) -> DeliverySummaryOut:
+        return cls(
+            job_state=summary.job_state,
+            run_at=summary.run_at,
+            sent_at=summary.sent_at,
+            deferred_reason=summary.deferred_reason,
+            total=summary.total,
+            sent=summary.sent,
+            failed=summary.failed,
+            pending=summary.pending,
+            skipped=summary.skipped,
+            group_names=list(summary.group_names),
+        )
+
+
+class ReviewListItemOut(ApprovalRequestOut):
+    """A row of the Reports list: the review, plus how its latest send went
+    (null when it was never shared)."""
+
+    delivery: DeliverySummaryOut | None = None
+
+
 class PromptOut(BaseModel):
     """``prompt`` is the review the popup should ask about, or null."""
 
@@ -351,6 +390,8 @@ class UiConfigOut(BaseModel):
     timezone: str
     morning_alert_time: dt.time
     evening_alert_time: dt.time
+    working_days: list[int]
+    """Weekdays reports are made on, Monday = 0."""
     allow_custom_send_time: bool
     sheet_url: str | None
     user_name: str

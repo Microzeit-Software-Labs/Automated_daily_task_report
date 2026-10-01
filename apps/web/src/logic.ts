@@ -2,7 +2,7 @@
 // Times are always shown in the configured timezone (Settings.timezone), not
 // whatever the browser happens to think, so the UI agrees with the report.
 
-import type { ApprovalRequest, Group, Share } from "./api";
+import type { ApprovalRequest, DeliverySummary, Group, Share, UiConfig } from "./api";
 import type { Route } from "./router";
 
 /** "YYYY-MM-DD" for `at` as seen in `tz`. */
@@ -296,4 +296,249 @@ export function linkView(
     default:
       return "preparing";
   }
+}
+
+// -- Reports list --------------------------------------------------------------
+
+export type ResultTone = "go" | "warn" | "stop" | "info" | "neutral";
+
+/** Which filter tab a report belongs under. `in_progress` (scheduled, sending,
+ * waiting for WhatsApp) shows under "All" only. */
+export type ResultCategory = "needs_approval" | "sent" | "problem" | "not_shared" | "in_progress";
+
+export interface ReportResult {
+  label: string;
+  tone: ResultTone;
+  category: ResultCategory;
+}
+
+export function plural(count: number, word: string): string {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+/** WhatsApp can't send right now (a real provider that isn't connected). The
+ * mock always says it can, and is never "down". */
+export function whatsappIsDown(
+  status: { provider: string; can_send: boolean } | undefined,
+): boolean {
+  return !!status && status.provider !== "mock" && !status.can_send;
+}
+
+/** "17:30" today, or "Wed 16 Sep 17:30" on another day, in `tz`. */
+export function whenLabel(
+  iso: string | null | undefined,
+  tz: string,
+  now: Date = new Date(),
+): string {
+  if (!iso) return "—";
+  const day = localDateIn(tz, new Date(iso));
+  const time = formatTime(iso, tz);
+  return day === localDateIn(tz, now) ? time : `${formatDate(day)} ${time}`;
+}
+
+/** What one report's row says in the Reports list: its outcome in words, not
+ * the internal state. The words depend on the time and on WhatsApp's
+ * connection, which is why the server only sends the numbers. */
+export function deliveryResult(
+  review: Pick<ApprovalRequest, "state">,
+  delivery: DeliverySummary | null | undefined,
+  ctx: { tz: string; now: Date; whatsappDown: boolean },
+): ReportResult {
+  const { state } = review;
+  if (isOpen(state)) return { label: "Needs your approval", tone: "warn", category: "needs_approval" };
+  if (state === "CLOSED_NO_SHARE") return { label: "Not shared", tone: "neutral", category: "not_shared" };
+  if (state === "CANCELLED") return { label: "Cancelled", tone: "neutral", category: "not_shared" };
+  if (state === "EXPIRED") return { label: "Expired", tone: "neutral", category: "not_shared" };
+  if (!delivery) return { label: "Approved", tone: "info", category: "in_progress" };
+
+  switch (delivery.job_state) {
+    case "SENT":
+      return { label: `Sent to ${plural(delivery.sent, "group")}`, tone: "go", category: "sent" };
+    case "PARTIALLY_SENT":
+      return {
+        label: `Partly sent ${delivery.sent}/${delivery.total}`,
+        tone: "warn",
+        category: "problem",
+      };
+    case "FAILED":
+      return { label: "Failed", tone: "stop", category: "problem" };
+    case "DEFERRED":
+      return { label: "Held back", tone: "warn", category: "problem" };
+    case "SENDING":
+      return { label: "Sending", tone: "info", category: "in_progress" };
+    case "CANCELLED":
+    case "SUPERSEDED":
+      return { label: "Cancelled", tone: "neutral", category: "not_shared" };
+    default: {
+      // Waiting its turn: PENDING / SCHEDULED / RESCHEDULED.
+      // A minute of slack: "now" is stamped by the server a moment after this
+      // page last read its own clock, and the worker picks it up within a tick.
+      const due = delivery.run_at ? new Date(delivery.run_at).getTime() <= ctx.now.getTime() + 60_000 : true;
+      if (due && ctx.whatsappDown) {
+        return { label: "Waiting for WhatsApp", tone: "warn", category: "in_progress" };
+      }
+      if (due) return { label: "Sending", tone: "info", category: "in_progress" };
+      return {
+        label: `Scheduled ${whenLabel(delivery.run_at, ctx.tz, ctx.now)}`,
+        tone: "info",
+        category: "in_progress",
+      };
+    }
+  }
+}
+
+/** "Ops, Dev" or "Ops, Dev +2" for the Groups column. */
+export function groupsLabel(names: string[] | undefined, shown = 2): string {
+  if (!names || names.length === 0) return "—";
+  if (names.length <= shown) return names.join(", ");
+  return `${names.slice(0, shown).join(", ")} +${names.length - shown}`;
+}
+
+export const REPORT_FILTERS = [
+  { id: "all", label: "All" },
+  { id: "needs_approval", label: "Needs approval" },
+  { id: "sent", label: "Sent" },
+  { id: "problem", label: "Problems" },
+  { id: "not_shared", label: "Not shared" },
+] as const;
+export type ReportFilter = (typeof REPORT_FILTERS)[number]["id"];
+
+export function matchesFilter(result: ReportResult, filter: ReportFilter): boolean {
+  return filter === "all" || result.category === filter;
+}
+
+export const REPORT_PERIODS = [
+  { id: "today", label: "Today", days: 1 },
+  { id: "week", label: "7 days", days: 7 },
+  { id: "month", label: "30 days", days: 30 },
+] as const;
+export type ReportPeriod = (typeof REPORT_PERIODS)[number]["id"];
+
+/** A bare calendar date moved by `days` (no timezone can shift it). */
+export function shiftDate(isoDate: string, days: number): string {
+  const moved = new Date(`${isoDate}T00:00:00Z`);
+  moved.setUTCDate(moved.getUTCDate() + days);
+  return moved.toISOString().slice(0, 10);
+}
+
+/** The first calendar day a period of `days` days (today included) covers. */
+export function periodStart(days: number, tz: string, now: Date = new Date()): string {
+  return shiftDate(localDateIn(tz, now), -(days - 1));
+}
+
+/** Monday = 0, like the server's `working_days`. */
+export function weekdayIndex(isoDate: string): number {
+  return (new Date(`${isoDate}T00:00:00Z`).getUTCDay() + 6) % 7;
+}
+
+const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/** "Mon to Fri", "Every day", or "Mon, Wed, Fri". */
+export function workingDaysLabel(days: number[]): string {
+  const sorted = [...new Set(days)].filter((d) => d >= 0 && d <= 6).sort((a, b) => a - b);
+  if (sorted.length === 0) return "No days";
+  if (sorted.length === 7) return "Every day";
+  const first = sorted[0] ?? 0;
+  const last = sorted[sorted.length - 1] ?? 0;
+  if (sorted.length > 2 && last - first === sorted.length - 1) {
+    return `${DAY_NAMES[first]} to ${DAY_NAMES[last]}`;
+  }
+  return sorted.map((d) => DAY_NAMES[d]).join(", ");
+}
+
+export interface NextReport {
+  kind: "MORNING" | "EVENING";
+  at: Date;
+}
+
+/** The next 09:00 / 17:00 style report time after `now`, skipping days that
+ * aren't working days. Null only if no working day is configured. */
+export function nextReport(
+  config: Pick<UiConfig, "timezone" | "morning_alert_time" | "evening_alert_time" | "working_days">,
+  now: Date = new Date(),
+): NextReport | null {
+  const today = localDateIn(config.timezone, now);
+  const slots: [NextReport["kind"], string][] = [
+    ["MORNING", config.morning_alert_time.slice(0, 5)],
+    ["EVENING", config.evening_alert_time.slice(0, 5)],
+  ];
+  for (let offset = 0; offset <= 7; offset++) {
+    const date = shiftDate(today, offset);
+    if (!config.working_days.includes(weekdayIndex(date))) continue;
+    for (const [kind, time] of slots) {
+      const at = zonedWallTimeToUtc(date, time, config.timezone);
+      if (at.getTime() > now.getTime()) return { kind, at };
+    }
+  }
+  return null;
+}
+
+/** "in 25 min", "in 2 h 10 min", or the day and time once it is a day or more away. */
+export function untilLabel(at: Date, tz: string, now: Date = new Date()): string {
+  const minutes = Math.max(0, Math.round((at.getTime() - now.getTime()) / 60_000));
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `in ${minutes} min`;
+  if (minutes < 24 * 60) {
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return m === 0 ? `in ${h} h` : `in ${h} h ${m} min`;
+  }
+  return `${formatDate(localDateIn(tz, at))} ${formatTime(at.toISOString(), tz)}`;
+}
+
+/** The status banner at the top of a report's own page. */
+export interface ReportBanner {
+  tone: ResultTone;
+  title: string;
+  message: string;
+}
+
+/** A review's latest send as a summary, from the review detail's `shares`. */
+export function summaryFromShare(share: Share): DeliverySummary {
+  const states = share.recipients.map((r) => r.state);
+  const count = (...wanted: string[]) => states.filter((s) => wanted.includes(s)).length;
+  const sent = count("SENT");
+  const failed = count("FAILED");
+  const skipped = count("SKIPPED", "CANCELLED");
+  return {
+    job_state: share.job.state,
+    run_at: share.run_at ?? null,
+    sent_at: share.job.sent_at ?? null,
+    deferred_reason: share.job.deferred_reason ?? null,
+    total: states.length,
+    sent,
+    failed,
+    pending: states.length - sent - failed - skipped,
+    skipped,
+    group_names: [],
+  };
+}
+
+const BANNER_MESSAGES: Record<string, string> = {
+  "Needs your approval": "Check the report, choose who gets it and when, then share it.",
+  "Not shared": "You closed this report without sharing it.",
+  Cancelled: "This report was cancelled and nothing was sent.",
+  Expired: "This report was never approved, so nothing was sent.",
+  Failed: "Nothing reached WhatsApp. You can retry each group below.",
+  "Held back":
+    "It was not sent automatically because it was too late. Start a new report to share current data.",
+  "Waiting for WhatsApp": "It goes out by itself once WhatsApp reconnects, if it is still the same day.",
+  Sending: "It is on its way.",
+};
+
+export function reportBanner(
+  review: Pick<ApprovalRequest, "state">,
+  latest: Share | undefined,
+  ctx: { tz: string; now: Date; whatsappDown: boolean },
+): ReportBanner {
+  const result = deliveryResult(review, latest ? summaryFromShare(latest) : null, ctx);
+  let message = BANNER_MESSAGES[result.label] ?? "";
+  if (!message && result.label.startsWith("Sent")) message = "Delivered to WhatsApp.";
+  if (!message && result.label.startsWith("Partly")) {
+    message = "Some groups did not get it. Retry them below.";
+  }
+  if (!message && result.label.startsWith("Scheduled")) {
+    message = "It will be sent at that time. The report was frozen when you approved it.";
+  }
+  return { tone: result.tone, title: result.label, message };
 }

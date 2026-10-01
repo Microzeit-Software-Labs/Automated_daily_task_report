@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { api, type UiConfig, type WhatsAppStatus } from "./api";
+import { api } from "./api";
 import { PromptHost } from "./components/PromptHost";
+import { ToastProvider } from "./components/Toast";
 import { WhatsAppBanner } from "./components/WhatsAppBanner";
 import { WhatsAppLinkModal } from "./components/WhatsAppLinkModal";
-import { formatTime } from "./logic";
+import { WhatsAppPill } from "./components/WhatsAppPill";
 import { Dashboard } from "./pages/Dashboard";
 import { Groups } from "./pages/Groups";
 import { Review } from "./pages/Review";
@@ -14,6 +15,14 @@ import { href, useRoute } from "./router";
 import { ErrorNote } from "./ui";
 
 export function App() {
+  return (
+    <ToastProvider>
+      <Shell />
+    </ToastProvider>
+  );
+}
+
+function Shell() {
   const route = useRoute();
   const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: Infinity });
   // One shared status query: the pill, the banner and Settings all read it.
@@ -40,7 +49,7 @@ export function App() {
             Settings
           </a>
         </nav>
-        {config.data && <StatusPill config={config.data} status={status.data} failed={status.isError} />}
+        {config.data && <WhatsAppPill config={config.data} status={status.data} failed={status.isError} />}
       </header>
       <WhatsAppBanner status={status.data} onLink={() => setLinking(true)} />
       <main className="main">
@@ -51,7 +60,9 @@ export function App() {
         ) : route.name === "review" ? (
           <Review id={route.id} config={config.data} />
         ) : route.name === "groups" ? (
-          <Groups />
+          <div className="page page-narrow">
+            <Groups />
+          </div>
         ) : route.name === "settings" ? (
           <Settings config={config.data} status={status.data} onLink={() => setLinking(true)} />
         ) : (
@@ -61,53 +72,5 @@ export function App() {
       {config.data && <PromptHost config={config.data} />}
       {linking && <WhatsAppLinkModal status={status.data} onClose={() => setLinking(false)} />}
     </div>
-  );
-}
-
-const STATE_LABELS: Record<string, string> = {
-  CONNECTED: "WhatsApp connected",
-  CONNECTING: "WhatsApp connecting",
-  LOGIN_REQUIRED: "WhatsApp needs linking",
-  UNAVAILABLE: "WhatsApp unavailable",
-  AUTOMATION_ERROR: "WhatsApp error",
-};
-
-function StatusPill({
-  config,
-  status: s,
-  failed,
-}: {
-  config: UiConfig;
-  status: WhatsAppStatus | undefined;
-  failed: boolean;
-}) {
-  // The mock always reports CONNECTED; never let it pass for real WhatsApp.
-  const mock = s?.provider === "mock";
-  const tone = !s
-    ? "neutral"
-    : mock
-      ? "warn"
-      : s.can_send
-        ? "go"
-        : s.state === "CONNECTING"
-          ? "warn"
-          : "stop";
-  const label = failed
-    ? "API unreachable"
-    : mock
-      ? "Test mode: WhatsApp not connected (WHATSAPP_PROVIDER=mock)"
-      : s
-        ? s.reason === "AGENT_OFFLINE"
-          ? "WhatsApp service stopped"
-          : (STATE_LABELS[s.state] ?? s.state)
-        : "Checking…";
-  const title = s
-    ? `${s.provider} · ${s.detail || s.state} · last send ${formatTime(s.last_successful_send_at, config.timezone)}`
-    : undefined;
-  return (
-    <span className={`pill pill-${failed ? "stop" : tone}`} title={title} role="status">
-      <span className="dot" aria-hidden="true" />
-      {label}
-    </span>
   );
 }

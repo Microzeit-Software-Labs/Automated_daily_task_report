@@ -457,7 +457,7 @@
           "approvals"
         ],
         "summary": "List Reviews",
-        "description": "Newest first. How a client finds today's 09:00 / 17:00 review.",
+        "description": "Newest first, each with how its latest send went. How a client finds\ntoday's 09:00 / 17:00 review, and the Reports list.",
         "operationId": "list_reviews_approval_requests_get",
         "parameters": [
           {
@@ -476,6 +476,25 @@
               ],
               "title": "Local Date"
             }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only reviews for this day or later (the Reports period filter).",
+              "title": "Since"
+            },
+            "description": "Only reviews for this day or later (the Reports period filter)."
           },
           {
             "name": "limit",
@@ -498,7 +517,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/ApprovalRequestOut"
+                    "$ref": "#/components/schemas/ReviewListItemOut"
                   },
                   "title": "Response List Reviews Approval Requests Get"
                 }
@@ -1950,6 +1969,90 @@
         "title": "ConflictResolution",
         "description": "A human's decision on a parked collision. Shared by the service layer,\nthe API schema, and the database CHECK constraint (``models/sync.py``'s\n``RESOLUTIONS``) so the three cannot drift to accept different values."
       },
+      "DeliverySummaryOut": {
+        "properties": {
+          "job_state": {
+            "$ref": "#/components/schemas/ShareJobState"
+          },
+          "run_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run At"
+          },
+          "sent_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sent At"
+          },
+          "deferred_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deferred Reason"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "sent": {
+            "type": "integer",
+            "title": "Sent"
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed"
+          },
+          "pending": {
+            "type": "integer",
+            "title": "Pending"
+          },
+          "skipped": {
+            "type": "integer",
+            "title": "Skipped"
+          },
+          "group_names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Group Names"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_state",
+          "run_at",
+          "sent_at",
+          "deferred_reason",
+          "total",
+          "sent",
+          "failed",
+          "pending",
+          "skipped",
+          "group_names"
+        ],
+        "title": "DeliverySummaryOut",
+        "description": "How the latest send for a review went, in numbers. The Reports list\nturns it into words (\"Sent to 3 groups\", \"Partly sent 2/3\", ...)."
+      },
       "GroupCandidateOut": {
         "properties": {
           "external_jid": {
@@ -2193,6 +2296,105 @@
           "changes_since_last_share"
         ],
         "title": "ReviewDetailOut"
+      },
+      "ReviewListItemOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "display_id": {
+            "type": "string",
+            "title": "Display Id"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ApprovalKind"
+          },
+          "local_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Local Date"
+          },
+          "scheduled_for": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Scheduled For"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ApprovalState"
+          },
+          "opened_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opened At"
+          },
+          "approved_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved By User Id"
+          },
+          "approved_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved At"
+          },
+          "snoozed_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snoozed Until"
+          },
+          "delivery": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeliverySummaryOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "display_id",
+          "kind",
+          "local_date",
+          "scheduled_for",
+          "state",
+          "opened_at",
+          "approved_by_user_id",
+          "approved_at"
+        ],
+        "title": "ReviewListItemOut",
+        "description": "A row of the Reports list: the review, plus how its latest send went\n(null when it was never shared)."
       },
       "ShareJobOut": {
         "properties": {
@@ -2887,6 +3089,13 @@
             "format": "time",
             "title": "Evening Alert Time"
           },
+          "working_days": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Working Days"
+          },
           "allow_custom_send_time": {
             "type": "boolean",
             "title": "Allow Custom Send Time"
@@ -2912,6 +3121,7 @@
           "timezone",
           "morning_alert_time",
           "evening_alert_time",
+          "working_days",
           "allow_custom_send_time",
           "sheet_url",
           "user_name"

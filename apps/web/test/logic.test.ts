@@ -1,20 +1,37 @@
 import { describe, expect, it } from "vitest";
 
-import { errorFromBody, type Group, type Share } from "../src/api";
+import {
+  type ApprovalRequest,
+  type DeliverySummary,
+  errorFromBody,
+  type Group,
+  type Share,
+} from "../src/api";
 import {
   defaultRecipientIds,
+  deliveryResult,
+  formatDate,
   formatTime,
+  groupsLabel,
   isLaterDay,
   isOpen,
   isSettling,
   linkView,
   localDateIn,
+  matchesFilter,
+  nextReport,
+  periodStart,
   promptAppearanceKey,
+  reportBanner,
   resolveSendAt,
   shareButtonLabel,
+  shiftDate,
   showPromptOn,
+  untilLabel,
   whatsappBanner,
+  whatsappIsDown,
   whatsappSegments,
+  workingDaysLabel,
   zonedWallTimeToUtc,
 } from "../src/logic";
 
@@ -317,6 +334,247 @@ describe("linkView", () => {
   it("'nothing is happening' right after asking is still preparing, but not for long", () => {
     expect(linkView(link("IDLE"), 3_000)).toBe("preparing");
     expect(linkView(link("IDLE"), 11_000)).toBe("failed");
+  });
+});
+
+// -- Reports list ------------------------------------------------------------
+
+function delivery(overrides: Partial<DeliverySummary> = {}): DeliverySummary {
+  return {
+    job_state: "SENT",
+    run_at: "2026-09-15T11:30:00Z",
+    sent_at: "2026-09-15T11:30:05Z",
+    deferred_reason: null,
+    total: 3,
+    sent: 3,
+    failed: 0,
+    pending: 0,
+    skipped: 0,
+    group_names: ["Dev", "Ops", "Test"],
+    ...overrides,
+  };
+}
+
+describe("deliveryResult", () => {
+  const now = new Date("2026-09-15T11:30:00Z"); // 17:00 IST
+  const ctx = { tz: IST, now, whatsappDown: false };
+  const result = (state: string, d?: Partial<DeliverySummary> | null, over = {}) =>
+    deliveryResult({ state } as ApprovalRequest, d === null ? null : delivery(d), { ...ctx, ...over });
+
+  it("a report still waiting on you needs approval, whatever else it carries", () => {
+    for (const state of ["REVIEW_PENDING", "USER_EDITING", "READY"]) {
+      expect(result(state, null)).toEqual({
+        label: "Needs your approval",
+        tone: "warn",
+        category: "needs_approval",
+      });
+    }
+  });
+
+  it("a report that was closed, cancelled or never approved was not shared", () => {
+    expect(result("CLOSED_NO_SHARE", null)).toMatchObject({ label: "Not shared", category: "not_shared" });
+    expect(result("CANCELLED", null)).toMatchObject({ label: "Cancelled", category: "not_shared" });
+    expect(result("EXPIRED", null)).toMatchObject({ label: "Expired", category: "not_shared" });
+  });
+
+  it("says how many groups got it", () => {
+    expect(result("APPROVED")).toEqual({ label: "Sent to 3 groups", tone: "go", category: "sent" });
+    expect(result("APPROVED", { sent: 1, total: 1 })).toMatchObject({ label: "Sent to 1 group" });
+  });
+
+  it("a partly sent report is a problem and says how partly", () => {
+    expect(result("APPROVED", { job_state: "PARTIALLY_SENT", sent: 2, failed: 1 })).toEqual({
+      label: "Partly sent 2/3",
+      tone: "warn",
+      category: "problem",
+    });
+  });
+
+  it("failed and held back are problems", () => {
+    expect(result("APPROVED", { job_state: "FAILED", sent: 0, failed: 3 })).toMatchObject({
+      label: "Failed",
+      tone: "stop",
+      category: "problem",
+    });
+    expect(result("APPROVED", { job_state: "DEFERRED" })).toMatchObject({
+      label: "Held back",
+      category: "problem",
+    });
+  });
+
+  it("a send in the future says when, on today's clock or with the day", () => {
+    const later = { job_state: "SCHEDULED" as const, sent: 0, sent_at: null };
+    expect(result("APPROVED", { ...later, run_at: "2026-09-15T16:00:00Z" })).toEqual({
+      label: "Scheduled 21:30",
+      tone: "info",
+      category: "in_progress",
+    });
+    // On another day the day is spelled out, as the rest of the UI spells it.
+    expect(result("APPROVED", { ...later, run_at: "2026-09-16T03:30:00Z" })).toMatchObject({
+      label: `Scheduled ${formatDate("2026-09-16")} 09:00`,
+    });
+  });
+
+  it("a send that is due while WhatsApp is down is waiting, not failed", () => {
+    const due = { job_state: "SCHEDULED" as const, sent: 0, run_at: "2026-09-15T11:00:00Z" };
+    expect(result("APPROVED", due, { whatsappDown: true })).toEqual({
+      label: "Waiting for WhatsApp",
+      tone: "warn",
+      category: "in_progress",
+    });
+    expect(result("APPROVED", due, { whatsappDown: false })).toMatchObject({ label: "Sending" });
+  });
+
+  it("a send due within the minute already counts as sending, not scheduled", () => {
+    // "Now" is stamped by the server a moment after this page last read its clock.
+    const soon = { job_state: "SCHEDULED" as const, sent: 0, run_at: "2026-09-15T11:30:40Z" };
+    expect(result("APPROVED", soon)).toMatchObject({ label: "Sending" });
+    const later = { ...soon, run_at: "2026-09-15T11:32:00Z" };
+    expect(result("APPROVED", later)).toMatchObject({ label: "Scheduled 17:02" });
+  });
+
+  it("being down does not change a send that is not due yet", () => {
+    const later = { job_state: "SCHEDULED" as const, sent: 0, run_at: "2026-09-15T16:00:00Z" };
+    expect(result("APPROVED", later, { whatsappDown: true })).toMatchObject({
+      label: "Scheduled 21:30",
+    });
+  });
+
+  it("an approved report with no send recorded is just approved", () => {
+    expect(result("APPROVED", null)).toMatchObject({ label: "Approved", category: "in_progress" });
+  });
+});
+
+describe("report filters and periods", () => {
+  it("each filter keeps its own category, and 'All' keeps everything", () => {
+    const sent = { label: "", tone: "go", category: "sent" } as const;
+    const scheduled = { label: "", tone: "info", category: "in_progress" } as const;
+    expect(matchesFilter(sent, "sent")).toBe(true);
+    expect(matchesFilter(sent, "problem")).toBe(false);
+    expect(matchesFilter(scheduled, "all")).toBe(true);
+    expect(matchesFilter(scheduled, "sent")).toBe(false);
+  });
+
+  it("a period starts that many days back, today included", () => {
+    const now = new Date("2026-09-15T11:30:00Z");
+    expect(periodStart(1, IST, now)).toBe("2026-09-15");
+    expect(periodStart(7, IST, now)).toBe("2026-09-09");
+    expect(periodStart(30, IST, now)).toBe("2026-08-17");
+  });
+
+  it("'today' is today in the configured zone, not UTC", () => {
+    // 20:00 UTC on the 15th is already the 16th in IST.
+    expect(periodStart(1, IST, new Date("2026-09-15T20:00:00Z"))).toBe("2026-09-16");
+  });
+
+  it("shifting a date crosses month and year ends", () => {
+    expect(shiftDate("2026-03-01", -1)).toBe("2026-02-28");
+    expect(shiftDate("2026-12-31", 1)).toBe("2027-01-01");
+  });
+
+  it("groups are listed, then counted", () => {
+    expect(groupsLabel([])).toBe("—");
+    expect(groupsLabel(["Ops"])).toBe("Ops");
+    expect(groupsLabel(["Dev", "Ops"])).toBe("Dev, Ops");
+    expect(groupsLabel(["A", "B", "C", "D"])).toBe("A, B +2");
+  });
+});
+
+describe("the next report", () => {
+  const config = {
+    timezone: IST,
+    morning_alert_time: "09:00:00",
+    evening_alert_time: "17:00:00",
+    working_days: [0, 1, 2, 3, 4],
+  };
+
+  it("before 09:00 the next report is this morning's", () => {
+    const next = nextReport(config, new Date("2026-09-15T02:00:00Z")); // 07:30 Tue
+    expect(next?.kind).toBe("MORNING");
+    expect(next?.at.toISOString()).toBe("2026-09-15T03:30:00.000Z");
+  });
+
+  it("between the two it is this evening's", () => {
+    const next = nextReport(config, new Date("2026-09-15T06:30:00Z")); // 12:00 Tue
+    expect(next?.kind).toBe("EVENING");
+    expect(next?.at.toISOString()).toBe("2026-09-15T11:30:00.000Z");
+  });
+
+  it("after the evening report it is tomorrow's morning", () => {
+    const next = nextReport(config, new Date("2026-09-15T13:00:00Z")); // 18:30 Tue
+    expect(next?.kind).toBe("MORNING");
+    expect(next?.at.toISOString()).toBe("2026-09-16T03:30:00.000Z");
+  });
+
+  it("skips the weekend", () => {
+    const next = nextReport(config, new Date("2026-09-18T13:00:00Z")); // 18:30 Fri
+    expect(next?.at.toISOString()).toBe("2026-09-21T03:30:00.000Z"); // Mon 09:00
+  });
+
+  it("is null when no day is a working day", () => {
+    expect(nextReport({ ...config, working_days: [] }, new Date("2026-09-15T02:00:00Z"))).toBeNull();
+  });
+
+  it("describes how far away it is", () => {
+    const now = new Date("2026-09-15T08:00:00Z");
+    const at = (minutes: number) => new Date(now.getTime() + minutes * 60_000);
+    expect(untilLabel(at(0), IST, now)).toBe("now");
+    expect(untilLabel(at(25), IST, now)).toBe("in 25 min");
+    expect(untilLabel(at(120), IST, now)).toBe("in 2 h");
+    expect(untilLabel(at(130), IST, now)).toBe("in 2 h 10 min");
+    expect(untilLabel(at(26 * 60), IST, now)).toBe(`${formatDate("2026-09-16")} 15:30`);
+  });
+
+  it("names the working days", () => {
+    expect(workingDaysLabel([0, 1, 2, 3, 4])).toBe("Mon to Fri");
+    expect(workingDaysLabel([0, 1, 2, 3, 4, 5, 6])).toBe("Every day");
+    expect(workingDaysLabel([0, 2, 4])).toBe("Mon, Wed, Fri");
+    expect(workingDaysLabel([0, 1])).toBe("Mon, Tue");
+    expect(workingDaysLabel([])).toBe("No days");
+  });
+});
+
+describe("whatsappIsDown", () => {
+  it("is down only for a real provider that cannot send", () => {
+    expect(whatsappIsDown(undefined)).toBe(false);
+    expect(whatsappIsDown({ provider: "local_agent", can_send: false })).toBe(true);
+    expect(whatsappIsDown({ provider: "local_agent", can_send: true })).toBe(false);
+    expect(whatsappIsDown({ provider: "mock", can_send: false })).toBe(false);
+  });
+});
+
+describe("reportBanner", () => {
+  const ctx = { tz: IST, now: new Date("2026-09-15T11:30:00Z"), whatsappDown: false };
+  const share = (state: Share["job"]["state"], recipients: string[]): Share =>
+    ({
+      job: { state, sent_at: null, deferred_reason: null },
+      run_at: "2026-09-15T11:30:00Z",
+      recipients: recipients.map((s) => ({ state: s })),
+    }) as unknown as Share;
+
+  it("asks for approval while the report is open", () => {
+    expect(reportBanner({ state: "REVIEW_PENDING" } as ApprovalRequest, undefined, ctx)).toMatchObject({
+      tone: "warn",
+      title: "Needs your approval",
+    });
+  });
+
+  it("reads the delivery from the latest share", () => {
+    const banner = reportBanner(
+      { state: "APPROVED" } as ApprovalRequest,
+      share("PARTIALLY_SENT", ["SENT", "SENT", "FAILED"]),
+      ctx,
+    );
+    expect(banner.title).toBe("Partly sent 2/3");
+    expect(banner.message).toMatch(/retry/i);
+  });
+
+  it("explains a report that is waiting for WhatsApp", () => {
+    const banner = reportBanner({ state: "APPROVED" } as ApprovalRequest, share("SCHEDULED", ["QUEUED"]), {
+      ...ctx,
+      whatsappDown: true,
+    });
+    expect(banner).toMatchObject({ tone: "warn", title: "Waiting for WhatsApp" });
   });
 });
 

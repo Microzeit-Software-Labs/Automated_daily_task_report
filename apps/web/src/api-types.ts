@@ -100,7 +100,8 @@ export interface paths {
         };
         /**
          * List Reviews
-         * @description Newest first. How a client finds today's 09:00 / 17:00 review.
+         * @description Newest first, each with how its latest send went. How a client finds
+         *     today's 09:00 / 17:00 review, and the Reports list.
          */
         get: operations["list_reviews_approval_requests_get"];
         put?: never;
@@ -614,6 +615,32 @@ export interface components {
          * @enum {string}
          */
         ConflictResolution: "kept_db" | "kept_sheet";
+        /**
+         * DeliverySummaryOut
+         * @description How the latest send for a review went, in numbers. The Reports list
+         *     turns it into words ("Sent to 3 groups", "Partly sent 2/3", ...).
+         */
+        DeliverySummaryOut: {
+            job_state: components["schemas"]["ShareJobState"];
+            /** Run At */
+            run_at: string | null;
+            /** Sent At */
+            sent_at: string | null;
+            /** Deferred Reason */
+            deferred_reason: string | null;
+            /** Total */
+            total: number;
+            /** Sent */
+            sent: number;
+            /** Failed */
+            failed: number;
+            /** Pending */
+            pending: number;
+            /** Skipped */
+            skipped: number;
+            /** Group Names */
+            group_names: string[];
+        };
         /** GroupCandidateOut */
         GroupCandidateOut: {
             /** External Jid */
@@ -703,6 +730,38 @@ export interface components {
             changes_since_last_share: components["schemas"]["ChangeSummaryOut"];
             /** Shares */
             shares?: components["schemas"]["ShareOut"][];
+        };
+        /**
+         * ReviewListItemOut
+         * @description A row of the Reports list: the review, plus how its latest send went
+         *     (null when it was never shared).
+         */
+        ReviewListItemOut: {
+            /** Id */
+            id: string;
+            /** Display Id */
+            display_id: string;
+            kind: components["schemas"]["ApprovalKind"];
+            /**
+             * Local Date
+             * Format: date
+             */
+            local_date: string;
+            /**
+             * Scheduled For
+             * Format: date-time
+             */
+            scheduled_for: string;
+            state: components["schemas"]["ApprovalState"];
+            /** Opened At */
+            opened_at: string | null;
+            /** Approved By User Id */
+            approved_by_user_id: string | null;
+            /** Approved At */
+            approved_at: string | null;
+            /** Snoozed Until */
+            snoozed_until?: string | null;
+            delivery?: components["schemas"]["DeliverySummaryOut"] | null;
         };
         /** ShareJobOut */
         ShareJobOut: {
@@ -947,6 +1006,8 @@ export interface components {
              * Format: time
              */
             evening_alert_time: string;
+            /** Working Days */
+            working_days: number[];
             /** Allow Custom Send Time */
             allow_custom_send_time: boolean;
             /** Sheet Url */
@@ -1266,6 +1327,8 @@ export interface operations {
         parameters: {
             query?: {
                 local_date?: string | null;
+                /** @description Only reviews for this day or later (the Reports period filter). */
+                since?: string | null;
                 limit?: number;
             };
             header?: never;
@@ -1280,7 +1343,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApprovalRequestOut"][];
+                    "application/json": components["schemas"]["ReviewListItemOut"][];
                 };
             };
             /** @description Validation Error */

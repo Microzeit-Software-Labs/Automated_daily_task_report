@@ -18,7 +18,9 @@ for `dist\index.html` when it starts, so restart uvicorn after the first build.
 
 ## Using it
 
-**Daily start, one command:** `.\scripts\start-interlock.ps1`. It opens the WhatsApp agent, the API and the worker, each in its own window, then opens the browser. Use `-NoAgent` if the agent is already running. There is no `npm start` in `apps/web`, because the API serves the UI.
+**Daily start, one command:** `.\scripts\start-interlock.ps1`. It starts the WhatsApp agent, the API and the worker **in the background** (no windows) under one supervisor that restarts anything that stops, then opens the browser. Running it again when Interlock is already up just opens the browser. Other options: `-Status` (what's running, is WhatsApp connected), `-Stop`, `-Restart` (do this after changing backend code), `-Console` (run in the window with live logs, for debugging) and `-NoAgent`. Logs are in `logs\` (`api.log`, `worker.log`, `agent.log`, `supervisor.log`).
+
+**Start at login:** `.\scripts\register-autostart.ps1` registers a Scheduled Task for your account (no administrator needed; `-Remove` undoes it). There is no `npm start` in `apps/web`, because the API serves the UI.
 
 Or by hand:
 
@@ -28,17 +30,24 @@ Or by hand:
 3. **Groups** → type the WhatsApp group name → **Find** → pick the exact match
    → **Pin**. This needs the WhatsApp agent running and paired. Tick "Preselect
    for …" to have the group selected by default on those reports.
-4. **Reports** lists today's reports. The worker opens one at 09:00 and 17:00
-   on working days; **Start a report now** opens a manual one at any time.
-5. On a report: check the numbers and the message, tick the groups, choose
-   when, then press **Share to N groups**. **Don't share this one** closes it
-   without sending.
+4. **Reports** is the home page (see below). The worker opens a report at 09:00
+   and 17:00 on working days; **Start a report now** opens a manual one at any time.
+5. On a report: check the numbers and the message (click the table to see it
+   large), tick the groups, choose when, then press **Share to N groups**.
+   **Don't share this one** closes it without sending, after asking you to confirm.
 6. The same page then shows delivery per group. It refreshes by itself while
    sending, and has **Retry** on any group that failed.
 
-**Desktop alerts:** the dashboard can raise a desktop notification when the
+**Desktop alerts:** the Reports page can raise a desktop notification when the
 09:00 or 17:00 report opens, but only while its tab is open. There is no push
 delivery yet (HANDOVER §8).
+
+## The pages
+
+- **Reports.** A strip at the top shows the WhatsApp state, the next report time ("Evening report at 17:00, in 2 h") and **Start a report now**. Reports waiting for you appear as **Needs your approval** cards with **Review** and **Close**. Below, **All reports** is a table (Report, Time, Result, Groups) for **Today / 7 days / 30 days**, filtered by **All, Needs approval, Sent, Problems, Not shared**. The Result column says what actually happened, in words: *Sent to 3 groups*, *Partly sent 2/3*, *Failed*, *Held back*, *Scheduled Fri 2 Oct 09:00*, *Waiting for WhatsApp*, *Not shared*. On a phone each row becomes a card.
+- **A report.** A status banner at the top, the message on the left (what will be sent, or what was sent), and on the right the decision: counts, who receives it, when, **Share**. After approval the right side shows delivery per group.
+- **Groups.** Pin and enable the WhatsApp groups reports go to.
+- **Settings.** WhatsApp (connected number, reconnect or link a different phone), the Google Sheet (a read-only link) and the schedule (times and days, read-only: they are set in `.env`).
 
 ## The 09:00 / 17:00 popup
 

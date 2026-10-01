@@ -18,14 +18,17 @@ from sqlalchemy.orm import Session
 
 from interlock.adapters.persistence.models import (
     ReportSnapshotRow,
+    ScheduledActionRow,
     ShareJobRow,
     ShareRecipientRow,
+    WhatsAppGroupRow,
 )
 from interlock.domain.approvals.states import RecipientState, ShareJobState
 from interlock.domain.common.errors import NotFoundError
 from interlock.domain.common.ids import SHARE_PREFIX, format_display_id, new_id
 from interlock.domain.sharing.job import ShareJob, ShareRecipient
 from interlock.domain.sharing.snapshot import ReportSnapshot
+from interlock.domain.sharing.summary import DeliverySummary, summarize_recipients
 from interlock.domain.sharing.validity import DeferReason
 
 
@@ -155,6 +158,77 @@ class ShareRepository:
             .order_by(ShareJobRow.action_version)
         ).scalars()
         return [_job_to_entity(row) for row in rows]
+
+    def delivery_summaries(self, review_ids: list[str]) -> dict[str, DeliverySummary]:
+        """The latest delivery for each of ``review_ids`` that has one.
+
+        A fixed handful of queries however many reviews are asked about (jobs,
+        then their recipients, schedule times and group names, each in one
+        ``IN`` query), so the Reports list costs the same for 5 rows or 100.
+        """
+        if not review_ids:
+            return {}
+        jobs = self._session.execute(
+            select(ShareJobRow)
+            .where(ShareJobRow.approval_request_id.in_(review_ids))
+            .order_by(ShareJobRow.approval_request_id, ShareJobRow.action_version)
+        ).scalars()
+        latest: dict[str, ShareJobRow] = {}
+        for job in jobs:  # ascending action_version, so the last one seen is the latest
+            latest[job.approval_request_id] = job
+        if not latest:
+            return {}
+
+        job_ids = [job.id for job in latest.values()]
+        recipients = self._session.execute(
+            select(
+                ShareRecipientRow.share_job_id,
+                ShareRecipientRow.state,
+                ShareRecipientRow.whatsapp_group_id,
+            ).where(ShareRecipientRow.share_job_id.in_(job_ids))
+        ).all()
+        action_ids = [job.scheduled_action_id for job in latest.values()]
+        run_ats: dict[str, dt.datetime] = dict(
+            self._session.execute(
+                select(ScheduledActionRow.id, ScheduledActionRow.run_at).where(
+                    ScheduledActionRow.id.in_(action_ids)
+                )
+            )
+            .tuples()
+            .all()
+        )
+        group_ids = {group_id for _, _, group_id in recipients}
+        names: dict[str, str] = dict(
+            self._session.execute(
+                select(WhatsAppGroupRow.id, WhatsAppGroupRow.display_name).where(
+                    WhatsAppGroupRow.id.in_(group_ids)
+                )
+            )
+            .tuples()
+            .all()
+        )
+
+        by_job: dict[str, list[tuple[RecipientState, str]]] = {}
+        for job_id, state, group_id in recipients:
+            by_job.setdefault(job_id, []).append((RecipientState(state), group_id))
+
+        result: dict[str, DeliverySummary] = {}
+        for review_id, job in latest.items():
+            rows = by_job.get(job.id, [])
+            total, sent, failed, pending, skipped = summarize_recipients([s for s, _ in rows])
+            result[review_id] = DeliverySummary(
+                job_state=ShareJobState(job.state),
+                run_at=run_ats.get(job.scheduled_action_id),
+                sent_at=job.sent_at,
+                deferred_reason=job.deferred_reason,
+                total=total,
+                sent=sent,
+                failed=failed,
+                pending=pending,
+                skipped=skipped,
+                group_names=tuple(sorted(names.get(group_id, "?") for _, group_id in rows)),
+            )
+        return result
 
     def latest_approved_job_for_review(self, approval_request_id: str) -> ShareJob | None:
         """The highest ``action_version`` job for this review, if any --

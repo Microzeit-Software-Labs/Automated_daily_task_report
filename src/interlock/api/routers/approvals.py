@@ -19,8 +19,10 @@ from interlock.api.schemas import (
     ApprovalRequestOut,
     CommitRequest,
     CommitResponse,
+    DeliverySummaryOut,
     PreviewResponse,
     ReviewDetailOut,
+    ReviewListItemOut,
     ShareJobOut,
     ShareOut,
     ShareRecipientOut,
@@ -35,16 +37,30 @@ from interlock.services.task_service import BulkUpdateItem
 router = APIRouter(prefix="/approval-requests", tags=["approvals"])
 
 
-@router.get("", response_model=list[ApprovalRequestOut])
+@router.get("", response_model=list[ReviewListItemOut])
 def list_reviews(
     local_date: dt.date | None = None,
+    since: dt.date | None = Query(
+        default=None, description="Only reviews for this day or later (the Reports period filter)."
+    ),
     limit: int = Query(default=20, ge=1, le=100),
     service: ReviewService = Depends(deps.get_review_service),
-) -> list[ApprovalRequestOut]:
-    """Newest first. How a client finds today's 09:00 / 17:00 review."""
-    return [
-        ApprovalRequestOut.from_entity(r) for r in service.list_recent(limit=limit, day=local_date)
-    ]
+    share_repo: ShareRepository = Depends(deps.get_share_repo),
+) -> list[ReviewListItemOut]:
+    """Newest first, each with how its latest send went. How a client finds
+    today's 09:00 / 17:00 review, and the Reports list."""
+    reviews = service.list_recent(limit=limit, day=local_date, since=since)
+    deliveries = share_repo.delivery_summaries([r.id for r in reviews])
+    items = []
+    for review in reviews:
+        summary = deliveries.get(review.id)
+        items.append(
+            ReviewListItemOut(
+                **ApprovalRequestOut.from_entity(review).model_dump(),
+                delivery=None if summary is None else DeliverySummaryOut.from_entity(summary),
+            )
+        )
+    return items
 
 
 @router.post("", response_model=ApprovalRequestOut, status_code=201)

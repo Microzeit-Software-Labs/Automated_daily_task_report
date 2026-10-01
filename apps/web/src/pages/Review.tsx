@@ -1,22 +1,28 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api, type Group, type ReviewDetail, type Share, type UiConfig } from "../api";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { Report } from "../components/ReportPreview";
+import { useToast } from "../components/Toast";
 import {
   formatDate,
   formatTime,
   isOpen,
   isSettling,
   KIND_LABELS,
+  reportBanner,
   shareButtonLabel,
+  whatsappIsDown,
 } from "../logic";
 import { href } from "../router";
-import { Report } from "../components/ReportPreview";
+import { Callout, ErrorNote, Icon, StateChip } from "../ui";
+import { useNow } from "../useNow";
 import { useShare } from "../useShare";
-import { ErrorNote, StateChip } from "../ui";
 
 export function Review({ id, config }: { id: string; config: UiConfig }) {
   const queryClient = useQueryClient();
+  const now = useNow();
   const detail = useQuery({
     queryKey: ["review", id],
     queryFn: () => api.review(id),
@@ -24,6 +30,7 @@ export function Review({ id, config }: { id: string; config: UiConfig }) {
     refetchInterval: (q) => (q.state.data?.shares.some(isSettling) ? 3_000 : false),
   });
   const groups = useQuery({ queryKey: ["groups"], queryFn: api.groups });
+  const status = useQuery({ queryKey: ["status"], queryFn: api.status, refetchInterval: 15_000 });
 
   // Record that the user opened it (REVIEW_PENDING -> USER_EDITING). Once.
   const opened = useRef(false);
@@ -38,31 +45,31 @@ export function Review({ id, config }: { id: string; config: UiConfig }) {
   if (!detail.data) return <p className="muted">Loading…</p>;
   const d = detail.data;
   const r = d.request;
+  const shares = [...d.shares].sort((a, b) => b.job.action_version - a.job.action_version); // newest first
+  const banner = reportBanner(r, shares[0], { tz: config.timezone, now, whatsappDown: whatsappIsDown(status.data) });
 
   return (
-    <div className="stack">
+    <div className="page stack">
       <a className="back" href={href({ name: "dashboard" })}>
         ← All reports
       </a>
-      <section className="card">
-        <div className="card-head">
-          <div>
-            <h1>{KIND_LABELS[r.kind]}</h1>
-            <p className="muted">
-              {formatDate(r.local_date)} · opened {formatTime(r.scheduled_for, config.timezone)} · {r.display_id}
-            </p>
-          </div>
-          <StateChip state={r.state} />
+      <div className="page-head">
+        <div>
+          <h1>{KIND_LABELS[r.kind]}</h1>
+          <p className="muted">
+            {formatDate(r.local_date)} · opened {formatTime(r.scheduled_for, config.timezone)} · {r.display_id}
+          </p>
         </div>
-        <WhatHappened detail={d} />
-      </section>
+      </div>
+
+      <Callout tone={banner.tone} title={banner.title}>
+        {banner.message}
+      </Callout>
 
       {isOpen(r.state) ? (
         <Composer detail={d} groupsError={groups.error} config={config} />
-      ) : d.shares.length > 0 ? (
-        d.shares.map((share) => (
-          <Delivery key={share.job.id} share={share} groups={groups.data ?? []} reviewId={id} config={config} />
-        ))
+      ) : shares.length > 0 ? (
+        <Sent shares={shares} groups={groups.data ?? []} reviewId={id} config={config} />
       ) : (
         <section className="card">
           <p className="empty">
@@ -76,12 +83,12 @@ export function Review({ id, config }: { id: string; config: UiConfig }) {
   );
 }
 
-// -- 1. What happened ------------------------------------------------------
+// -- Waiting for approval: the message on the left, the decision on the right -----
 
-function WhatHappened({ detail }: { detail: ReviewDetail }) {
+function Counts({ detail }: { detail: ReviewDetail }) {
   const s = detail.summary;
   const c = detail.changes_since_last_share;
-  const tiles: [string, number, string][] = [
+  const items: [string, number, string][] = [
     ["Completed today", s.completed_today, "go"],
     ["In progress", s.in_progress, "info"],
     ["Pending", s.pending, "warn"],
@@ -90,22 +97,20 @@ function WhatHappened({ detail }: { detail: ReviewDetail }) {
   ];
   return (
     <>
-      <div className="tiles">
-        {tiles.map(([label, value, tone]) => (
-          <div key={label} className={`tile tile-${tone}`}>
-            <span className="tile-value">{value}</span>
-            <span className="tile-label">{label}</span>
+      <dl className="counts">
+        {items.map(([label, value, tone]) => (
+          <div key={label} className={`count count-${tone}`}>
+            <dd>{value}</dd>
+            <dt>{label}</dt>
           </div>
         ))}
-      </div>
+      </dl>
       <p className="muted small">
         Since the last shared report: {c.added} added · {c.completed} completed · {c.modified} changed
       </p>
     </>
   );
 }
-
-// -- 2-4. What, who, when --------------------------------------------------
 
 function Composer({
   detail,
@@ -117,6 +122,8 @@ function Composer({
   config: UiConfig;
 }) {
   const id = detail.request.id;
+  const toast = useToast();
+  const [confirmClose, setConfirmClose] = useState(false);
   const {
     enabled,
     chosen,
@@ -138,11 +145,11 @@ function Composer({
   const canShare = ready && !("error" in sendAt);
 
   return (
-    <>
-      <section className="card">
+    <div className="split">
+      <section className="card split-main">
         <div className="card-head">
           <h2>What will be shared</h2>
-          <button className="btn btn-quiet" onClick={() => void preview.refetch()} disabled={preview.isFetching}>
+          <button className="btn btn-ghost btn-sm" onClick={() => void preview.refetch()} disabled={preview.isFetching}>
             {preview.isFetching ? "Refreshing…" : "Refresh"}
           </button>
         </div>
@@ -175,8 +182,10 @@ function Composer({
         </p>
       </section>
 
-      <section className="card">
-        <h2>Who receives it</h2>
+      <aside className="panel split-side" aria-label="Share this report">
+        <Counts detail={detail} />
+
+        <h3>Who receives it</h3>
         {groupsError ? (
           <ErrorNote error={groupsError} />
         ) : enabled.length === 0 ? (
@@ -187,11 +196,7 @@ function Composer({
           <div className="checks">
             {enabled.map((g) => (
               <label key={g.id} className="check">
-                <input
-                  type="checkbox"
-                  checked={isSelected(g.id)}
-                  onChange={(e) => toggle(g.id, e.target.checked)}
-                />
+                <input type="checkbox" checked={isSelected(g.id)} onChange={(e) => toggle(g.id, e.target.checked)} />
                 <span>
                   {g.display_name}
                   {g.description && <span className="muted small"> · {g.description}</span>}
@@ -201,7 +206,7 @@ function Composer({
           </div>
         )}
 
-        <h2 className="spaced">When</h2>
+        <h3>When</h3>
         <div className="segmented" role="radiogroup" aria-label="When to send">
           <label className="check">
             <input type="radio" name="when" checked={when.kind === "now"} onChange={() => setWhen({ kind: "now" })} />
@@ -230,54 +235,98 @@ function Composer({
             </label>
           )}
         </div>
-        {"error" in sendAt && when.kind === "at" && when.time !== "" && (
-          <p className="field-error">{sendAt.error}</p>
-        )}
+        {"error" in sendAt && when.kind === "at" && when.time !== "" && <p className="field-error">{sendAt.error}</p>}
 
         {status.data && !status.data.can_send && (
           <div className="note note-warn" role="status">
             <strong>WhatsApp isn't connected</strong>
             <span>
-              {status.data.detail || status.data.state}. You can still approve; sending will retry and may fail
-              until the agent is back.
+              {status.data.detail || status.data.state}. You can still approve: it waits and goes out when WhatsApp is
+              back, if it is still the same day.
             </span>
           </div>
         )}
         {share.error && !drifted && <ErrorNote error={share.error} />}
         {skip.error && <ErrorNote error={skip.error} />}
 
-        <div className="actions">
-          <button
-            className="btn btn-quiet"
-            disabled={busy}
-            onClick={() => {
-              if (window.confirm("Close this report without sharing it?")) skip.mutate();
-            }}
-          >
-            Don't share this one
-          </button>
-          <button className="btn btn-primary" disabled={!canShare} onClick={() => share.mutate(when)}>
-            {share.isPending ? "Sharing…" : shareButtonLabel(chosen.length)}
-          </button>
-        </div>
+        <button className="btn btn-primary btn-block" disabled={!canShare} onClick={() => share.mutate(when)}>
+          <Icon name="send" />
+          {share.isPending ? "Sharing…" : shareButtonLabel(chosen.length)}
+        </button>
         {chosen.length > 0 && (
-          <p className="muted small right">
+          <p className="muted small">
             To {chosen.map((g) => g.display_name).join(", ")}
             {when.kind === "now" ? ", right away" : ""}
           </p>
         )}
-      </section>
-    </>
+        <button className="btn btn-ghost btn-block" disabled={busy} onClick={() => setConfirmClose(true)}>
+          Don't share this one
+        </button>
+      </aside>
+
+      {confirmClose && (
+        <ConfirmDialog
+          title="Close this report without sharing?"
+          confirmLabel="Close report"
+          busy={skip.isPending}
+          onCancel={() => setConfirmClose(false)}
+          onConfirm={() =>
+            skip.mutate(undefined, {
+              onSuccess: () => {
+                setConfirmClose(false);
+                toast.show("Report closed without sharing.");
+              },
+              onError: () => setConfirmClose(false),
+            })
+          }
+        >
+          <p>It won't be sent to any group. You can still start a new report any time.</p>
+        </ConfirmDialog>
+      )}
+    </div>
   );
 }
 
-// -- 5. Did it send --------------------------------------------------------
+// -- After approval: what was sent, and how it went --------------------------------
 
 const DEFER_TEXT: Record<string, string> = {
   CROSSED_DAY_BOUNDARY: "it was approved on a different day",
   SNAPSHOT_STALE: "it waited longer than the grace window",
   DATA_DRIFTED: "your tasks changed after you approved it",
+  WHATSAPP_DISCONNECTED: "WhatsApp was disconnected until it was too late",
 };
+
+function Sent({
+  shares,
+  groups,
+  reviewId,
+  config,
+}: {
+  shares: Share[];
+  groups: Group[];
+  reviewId: string;
+  config: UiConfig;
+}) {
+  const latest = shares[0]!;
+  return (
+    <div className="split">
+      <section className="card split-main">
+        <div className="card-head">
+          <h2>The message</h2>
+        </div>
+        <Report
+          text={latest.rendered_body}
+          imageUrl={latest.has_image ? `/shares/snapshots/${latest.snapshot_id}/image.png` : null}
+        />
+      </section>
+      <div className="split-side stack">
+        {shares.map((share) => (
+          <Delivery key={share.job.id} share={share} groups={groups} reviewId={reviewId} config={config} />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function Delivery({
   share,
@@ -299,7 +348,7 @@ function Delivery({
   const job = share.job;
 
   return (
-    <section className="card">
+    <section className="panel">
       <div className="card-head">
         <div>
           <h2>Delivery</h2>
@@ -316,8 +365,8 @@ function Delivery({
         <div className="note note-warn">
           <strong>Held back</strong>
           <span>
-            Not sent because {DEFER_TEXT[job.deferred_reason ?? ""] ?? job.deferred_reason}. Start a new report to
-            share current data.
+            Not sent because {DEFER_TEXT[job.deferred_reason ?? ""] ?? job.deferred_reason}. Start a new report to share
+            current data.
           </span>
         </div>
       )}
@@ -331,7 +380,7 @@ function Delivery({
             {r.attempts > 1 && <span className="muted small">{r.attempts} attempts</span>}
             <StateChip state={r.state} />
             {r.state === "FAILED" && (
-              <button className="btn btn-quiet" disabled={retry.isPending} onClick={() => retry.mutate(r.id)}>
+              <button className="btn btn-sm" disabled={retry.isPending} onClick={() => retry.mutate(r.id)}>
                 Retry
               </button>
             )}
@@ -339,13 +388,6 @@ function Delivery({
         ))}
       </ul>
       {retry.error && <ErrorNote error={retry.error} />}
-      <details className="sent-body">
-        <summary>The message {job.state === "SENT" ? "that was sent" : "being sent"}</summary>
-        <Report
-          text={share.rendered_body}
-          imageUrl={share.has_image ? `/shares/snapshots/${share.snapshot_id}/image.png` : null}
-        />
-      </details>
     </section>
   );
 }

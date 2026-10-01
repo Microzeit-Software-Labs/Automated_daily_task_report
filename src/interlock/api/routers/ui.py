@@ -29,6 +29,7 @@ def ui_config(settings: Settings = Depends(deps.get_settings_dep)) -> UiConfigOu
         timezone=settings.timezone,
         morning_alert_time=settings.morning_alert_time,
         evening_alert_time=settings.evening_alert_time,
+        working_days=sorted(settings.working_days),
         allow_custom_send_time=settings.allow_custom_send_time,
         sheet_url=settings.sheet_import_url,
         user_name=settings.default_user_name,

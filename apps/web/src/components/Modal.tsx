@@ -10,6 +10,7 @@ export function Modal({
   icon,
   onClose,
   closeLabel = "Close",
+  wide = false,
   children,
 }: {
   title: string;
@@ -17,6 +18,8 @@ export function Modal({
   onClose?: () => void;
   /** Accessible name and tooltip of the × button. */
   closeLabel?: string;
+  /** For content that needs the room, like a report image. */
+  wide?: boolean;
   children: ReactNode;
 }) {
   const titleId = useId();
@@ -57,7 +60,7 @@ export function Modal({
 
   return (
     <div className="modal-backdrop">
-      <div ref={dialog} className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
+      <div ref={dialog} className={wide ? "modal modal-wide" : "modal"} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
         <header className="modal-head">
           {icon && <span className="modal-icon" aria-hidden="true">{icon}</span>}
           <h2 id={titleId}>{title}</h2>

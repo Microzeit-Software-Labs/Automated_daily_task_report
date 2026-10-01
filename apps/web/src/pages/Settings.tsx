@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api, type UiConfig, type WhatsAppStatus } from "../api";
-import { formatTime } from "../logic";
+import { formatTime, workingDaysLabel } from "../logic";
 import { ErrorNote } from "../ui";
 
 export function Settings({
@@ -14,10 +14,75 @@ export function Settings({
   onLink: () => void;
 }) {
   return (
-    <div className="stack">
-      <h1>Settings</h1>
+    <div className="page page-narrow stack">
+      <div className="page-head">
+        <div>
+          <h1>Settings</h1>
+          <p className="muted">How Interlock is connected. The sheet and schedule are set in the configuration file.</p>
+        </div>
+      </div>
       <WhatsAppCard config={config} status={status} onLink={onLink} />
+      <SheetCard config={config} />
+      <ScheduleCard config={config} />
     </div>
+  );
+}
+
+function SheetCard({ config }: { config: UiConfig }) {
+  return (
+    <section className="card">
+      <h2>Google Sheet</h2>
+      {config.sheet_url ? (
+        <>
+          <p>
+            Tasks are read from{" "}
+            <a href={config.sheet_url} target="_blank" rel="noreferrer">
+              your Google Sheet
+            </a>
+            . Edit them there; changes appear here within a minute.
+          </p>
+          <p className="muted small">
+            Interlock only reads the sheet and never changes it. Rows marked as another person's task are left out of
+            reports.
+          </p>
+        </>
+      ) : (
+        <p className="muted">
+          No sheet is connected, so reports use the tasks stored in Interlock. To import from a Google Sheet, set{" "}
+          <code>SHEET_IMPORT_URL</code> (see docs/sheet-import-setup.md).
+        </p>
+      )}
+    </section>
+  );
+}
+
+function ScheduleCard({ config }: { config: UiConfig }) {
+  const time = (value: string) => value.slice(0, 5);
+  return (
+    <section className="card">
+      <h2>Schedule</h2>
+      <dl className="facts">
+        <div>
+          <dt>Morning report</dt>
+          <dd>{time(config.morning_alert_time)}</dd>
+        </div>
+        <div>
+          <dt>Evening report</dt>
+          <dd>{time(config.evening_alert_time)}</dd>
+        </div>
+        <div>
+          <dt>Days</dt>
+          <dd>{workingDaysLabel(config.working_days)}</dd>
+        </div>
+        <div>
+          <dt>Time zone</dt>
+          <dd>{config.timezone}</dd>
+        </div>
+      </dl>
+      <p className="muted small">
+        A report opens at each time on those days and waits for your approval. Nothing is sent until you approve it.
+      </p>
+    </section>
   );
 }
 

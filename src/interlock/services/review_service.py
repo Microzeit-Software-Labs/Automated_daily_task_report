@@ -142,9 +142,9 @@ class ReviewService:
         return self._approvals.snooze(request.id, until=until, now=now)
 
     def list_recent(
-        self, *, limit: int = 20, day: dt.date | None = None
+        self, *, limit: int = 20, day: dt.date | None = None, since: dt.date | None = None
     ) -> list[ApprovalRequest]:
-        return self._approvals.list_recent(limit=limit, local_date=day)
+        return self._approvals.list_recent(limit=limit, local_date=day, since=since)
 
     def get(self, request_id: str) -> ApprovalRequest | None:
         return self._approvals.get(request_id)

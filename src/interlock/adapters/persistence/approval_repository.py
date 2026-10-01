@@ -53,13 +53,20 @@ class ApprovalRepository:
         return None if row is None else _to_entity(row)
 
     def list_recent(
-        self, *, limit: int = 20, local_date: dt.date | None = None
+        self,
+        *,
+        limit: int = 20,
+        local_date: dt.date | None = None,
+        since: dt.date | None = None,
     ) -> list[ApprovalRequest]:
         """Newest first by ``scheduled_for`` -- what the dashboard lists. With
-        ``local_date``, only that day's reviews."""
+        ``local_date``, only that day's reviews; with ``since``, only reviews
+        for that day or later (the Reports page's "last 7 days")."""
         query = select(ApprovalRequestRow)
         if local_date is not None:
             query = query.where(ApprovalRequestRow.local_date == local_date)
+        if since is not None:
+            query = query.where(ApprovalRequestRow.local_date >= since)
         rows = self._session.execute(
             query.order_by(
                 ApprovalRequestRow.scheduled_for.desc(), ApprovalRequestRow.display_id.desc()

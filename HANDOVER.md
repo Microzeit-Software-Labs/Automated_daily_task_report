@@ -1,8 +1,8 @@
 # Interlock — Handover
 
 **Project root:** `C:\Users\Admin\Documents\interlock`
-**Repo state:** git on `main`, remote `origin` = `github.com/kaifas-collab/Automatied_task`. **The user's rule: do not commit or push without their explicit approval.** On 1 Oct 2026 they approved committing and pushing **M1-M3** together (run `git status -sb` to see whether it has gone up). One git stash holds an unfinished M4 draft (`git stash list`; it is not part of M1-M3).
-**Phase status:** Phases 1–3 done and **in real use**: sheet import, approval, image reports and group sends have all run against real WhatsApp. A refinement round is in progress (§14): **M1-M3 done**; M4 (UI redesign) starts when the user says so; M5 (installer) is last.
+**Repo state:** git on `main`, remote `origin` = `github.com/kaifas-collab/Automatied_task`. **The user's rule: do not commit or push without their explicit approval.** On 1 Oct 2026 they approved committing and pushing **M1-M3** (`9d55b1f`, `9c7e841`: pushed), then approved committing **the background service and M4** (two local commits after `9c7e841`). **Those two are not pushed:** pushing needs its own go-ahead. `git stash list` is empty.
+**Phase status:** Phases 1–3 done and **in real use**: sheet import, approval, image reports and group sends have all run against real WhatsApp. A refinement round is in progress (§14): **M1-M4 done, plus the background service** (the first half of M5, built ahead of M4 at the user's request). The user has seen and approved M4. **Next: changing the Google Sheet link from the UI** (item 7 below), then the one-command installer.
 
 ---
 
@@ -26,12 +26,18 @@ It's shared "anyone with the link can view". At 09:00 and 17:00 Interlock should
 1. **M1** scheduling correctness: done.
 2. **M2** the 09:00/17:00 popup service: done.
 3. **M3** WhatsApp session management (QR reconnect/change phone from the UI): done and verified on real WhatsApp (§14).
-4. **M4** UI redesign (Reports page, report page, design system; Settings gets Sheet and Schedule cards): **waiting for the user to say go** (they asked to start it on a later day). A draft of its backend half (`DeliverySummary`, `ShareRepository.delivery_summaries`, a `since` filter on the reviews list) is saved in `git stash` as "M4 draft": `git stash show -p` to see it, `git stash pop` to start from it. The banner, link dialog and Settings page (WhatsApp card) already exist from M3.
-5. **M5** one-command installer + background service: **last**, as the user asked.
+4. **Background service: done** (1 Oct, the user asked for it before the rest of M4): the supervisor, `start-interlock.ps1` as a start/stop/status controller, and a login task. See §14.
+5. **M4** UI redesign (Reports page, report page, design system; Settings gets Sheet and Schedule cards): **done and committed (1 Oct); the user looked at it and is satisfied.** Verified in a real browser (§14).
+6. **M5** the one-command installer (`install.cmd`, winget prerequisites, the database/sheet/QR steps, README): **last**, as the user asked. Its service half already exists (item 4).
+7. **Next: add or change the Google Sheet link from the UI.** The user asked for it on 1 Oct and agreed it should work **like the WhatsApp linking**: a Settings card with the link and the last import ("Last read 11:52 · 96 tasks"), a **Change sheet / Connect a sheet** button, a step-by-step dialog (paste link → **Check**, showing the task count and first titles or a plain fix such as "Share → Anyone with the link → Viewer" → confirm → wait for the worker's first import → "96 tasks imported"), and a page-wide banner when the sheet can't be read. A failed check changes nothing; the new sheet is proven readable before it replaces the old. **Not started; get the user's go before building.** Three things the design must include (checked against the code on 1 Oct):
+   - **Task identity must include the sheet.** The importer matches by `sr:<Sr No.>` only, across hidden tasks too (`sheet_import_service.py` `tick`), and un-hides any matched task whose row isn't delegated (`_update`). So "hide the old sheet's tasks" alone would be undone on the next tick and old tasks overwritten by the new sheet's rows. Scope the ref to `<spreadsheetId>:<gid>|sr:<n>` with a one-off migration stamping today's tasks with the current sheet; retire the old sheet's tasks with their own marker, not the delegation one (switching back then restores them).
+   - **One source of truth: the database.** `.env`'s `SHEET_IMPORT_URL` only seeds it on first run; the M5 installer saves through the same check-and-save code. The worker reads the link every tick (today it is built once at startup in `workers/loop.py` `main`) and imports at once when it changes; `/config/ui` reads it from the database too. Keep refusing it alongside `SHEETS_PROVIDER=google` (`adapters/sheets/factory.py`).
+   - **Record the last import** (time, task count, or the error) so the card and the banner can show it; today a failed import only reaches `logs\worker.log`. Audit each link change.
 
 **Operational notes:**
-- Start everything with `.\scripts\start-interlock.ps1` (agent, API+UI, worker; `-NoAgent` if the agent is already running). **Exactly one agent may run.** Until M5's supervisor exists, nothing restarts a stopped agent, and on 1 Oct its heartbeat had gone stale overnight.
-- After **any** backend change the running API/worker must be restarted: the rebuilt UI in `apps/web/dist` is shared and can be newer than the running API (e.g. it sends `delay_minutes`, which an older API rejects).
+- **Interlock now runs as a hidden background service** (§14): `.\scripts\start-interlock.ps1` starts it (and opens the browser), `-Status` shows what is running, `-Stop`, `-Restart`, `-Console` (foreground, live logs). `.\scripts\register-autostart.ps1` (already run on 1 Oct) starts it at login. Logs: `logs\{api,worker,agent,supervisor}.log`. **Exactly one agent may run**; the supervisor, the agent's own lock and a start-up sweep all enforce it. Don't start things by hand next to the service.
+- After **any** backend change run `.\scripts\start-interlock.ps1 -Restart`: the rebuilt UI in `apps/web/dist` is shared and can be newer than the running API (e.g. it sends `delay_minutes`, which an older API rejects).
+- **Running the test suite is safe while the service runs:** tests use `interlock_test`, the service uses `interlock`.
 
 **How this was built — keep doing it:**
 - Plan non-trivial work first (plan files live in `C:\Users\Admin\.claude\plans\`).
@@ -536,4 +542,60 @@ The user asked for four refinements without rewriting anything that works: a cle
 - A real `setTimeout` inside pairing made each agent test file linger ~3 minutes (and race). Timers are injectable (`Timers`) and the real one is `unref()`'d. The agent suite takes ~1 s.
 - Windows paths with backslashes in inline `python -` heredocs get mangled (`\a` became a BEL character). Use the Write/Edit tools for any text containing backslashes, and scan for control characters.
 
-### Still to do: M4 (UI redesign: Reports page, report page, design system), M5 (installer + background service) — see the plan file.
+### Background service (done 1 Oct 2026, ahead of M4, at the user's request)
+
+One hidden **supervisor** process runs the API, the worker and the agent, so nothing needs a window and nothing stays dead. Verified on this laptop with the real stack: started, WhatsApp reconnected as `+918910056457`, `-Restart` and `-Stop` clean (one agent, old pids gone), and the logon task fired on demand without a duplicate.
+
+| Piece | Where |
+|---|---|
+| The supervisor (`python -m interlock.supervisor`) | `src/interlock/supervisor.py` |
+| Controller: start / `-Stop` / `-Restart` / `-Status` / `-Console` | `scripts/start-interlock.ps1` |
+| Start at login (Scheduled Task "Interlock", Startup-folder fallback; `-Remove`) | `scripts/register-autostart.ps1` |
+| Tests (24: restarts, logs, stop, grandchildren, locks, leftover sweep) | `tests/unit/test_supervisor.py` |
+
+**Decisions worth knowing:**
+- **Restarts back off** 2 s → 60 s and reset after a 60 s healthy run (`Backoff`, pure). A child that can't even start (node missing) is retried the same way.
+- **Children are stopped with `taskkill /T /F`, not `Popen.terminate()`.** The venv's `python.exe` is a *launcher* that starts the real interpreter as its child; stopping only the launcher leaves the real one running (it keeps the API port). A test pins this.
+- **One supervisor at a time** through an OS file lock (`logs/supervisor.lock`, released if the process dies, so no stale lock). A second start exits **0**, not an error, so the logon task doesn't retry for nothing.
+- **Stop = a stop file** (`logs/supervisor.stop`): a hidden process has no window to close. `-Stop` waits 30 s, then ends the supervisor.
+- **Hard kill:** the supervisor joins a kill-on-close Windows job object, but that is **best effort and cannot be proven in a Node/Electron-launched shell**: those run inside a job with silent breakaway, so children never join ours (this was probed and confirmed). The dependable guarantee is the **start-up sweep**: the status file records each child's pid *and process creation time*, and the next start stops exactly those still running (a recycled pid never matches). Don't "fix" the failing-looking job behaviour in a harness; test the sweep.
+- **Everything logs to files** (`logs/`, rotated at ~2 MB × 3). Under `pythonw` there is no console, so anything that goes wrong must reach `supervisor.log`; an uncaught crash is logged there. The first start failed silently on a 64-bit `ctypes` handle overflow (`AssignProcessToJobObject`) and left only an empty lock file: that is why.
+- **Not done, deliberately:** a watchdog that restarts a *running but hung* agent (its heartbeat goes stale while the process is alive). Process-level supervision covers the crash case; add the watchdog only if a hung agent is actually seen.
+- The old per-agent "Interlock WhatsApp Agent" Scheduled Task from `docs/whatsapp-agent-setup.md` is replaced (the doc is rewritten; `register-autostart.ps1` removes that task if it exists).
+
+### M4 front end (done 1 Oct 2026)
+
+The Reports page, the report page, the design system and the Settings cards, without rewriting what worked: the popup, the WhatsApp banner and link dialog, Groups and the data hooks (`useShare`) are the same code, restyled by the shared stylesheet.
+
+| Piece | Where |
+|---|---|
+| Result wording, filters, periods, "next report in…", report banner (all pure) | `apps/web/src/logic.ts` (`deliveryResult`, `matchesFilter`, `periodStart`, `nextReport`, `untilLabel`, `reportBanner`, ...), tests in `test/logic.test.ts` (65) |
+| Reports page: status strip, Needs-your-approval cards, filter tabs, period switch, table (cards on phones) | `pages/Dashboard.tsx` |
+| Report page: status banner, message left, sticky action panel right; after approval, the frozen message and per-group delivery | `pages/Review.tsx` |
+| Settings: WhatsApp, Google Sheet, Schedule | `pages/Settings.tsx` |
+| Icons, icon+text chips, callout | `ui.tsx` |
+| Toast, confirm dialog, image lightbox, WhatsApp pill | `components/{Toast,ConfirmDialog,ReportPreview,WhatsAppPill}.tsx` |
+| Close a waiting report (the existing UPDATE_ONLY commit) | `useCloseReport.ts` |
+| Tokens (spacing/type/radii scales), buttons, chips, table, responsive rules | `styles.css` |
+
+**Decisions worth knowing:**
+- **One fetch, filtered in the browser.** The Reports page fetches the last 30 days once (`since`, limit 100) and the Today / 7 days / 30 days switch and the filter tabs filter locally, so switching is instant. The Needs-your-approval cards come from the same list, so an open report is never hidden by the period.
+- **The words are built client-side** (`deliveryResult`) from the server's numbers plus the time and the WhatsApp state. A send due within a minute counts as "Sending", not "Scheduled" (the page's clock refreshes every 30 s). A due send while a *real* provider is down reads "Waiting for WhatsApp"; the mock is never "down".
+- **Every status is icon + words**, never colour alone (`Chip`).
+- **Closing a report asks first** (`ConfirmDialog`, safe choice focused), from the card and from the report page. The popup's "Skip this report" still uses `window.confirm` (a modal inside the popup would fight over focus).
+- **The popup is unchanged** and still hidden on its own report's page.
+- `.check input` is now limited to checkboxes and radios: the generic rule had shrunk the "Later today at" time input to a dot.
+
+**How it was verified (repeat this for UI work):** a disposable API on `interlock_test` with a fake *connected* WhatsApp (provider name `e2e-fake`, not `mock`, which the UI treats as test mode), seeded with a week of reports in every state (sent, partly sent, failed, held back, not shared, scheduled, waiting), plus a ~100-line Chrome DevTools driver over headless Edge (Node 22's built-in `WebSocket`) that really clicks and checks: filters (Problems 3, Sent 4), periods (Today 2), the close dialog, the image lightbox and Escape, a real share, light and dark theme, and a true 390 px phone viewport (`Emulation.setDeviceMetricsOverride`, since headless Edge refuses a window narrower than about 500 px) with no horizontal scroll and no console errors: 21/21. The scripts live in the session scratchpad, not the repo; recreate them if needed (`create_app(settings, clock, whatsapp_provider, sheets_provider)` on the test DB; seed through `TestClient` with a `FrozenClock` stepped through past days, using `tests/acceptance/conftest.py`'s `trigger_reviews` / `run_tick`).
+**Not covered:** a click-through of the Groups page (unchanged, restyled only), and light theme was checked on the Reports page only.
+
+### M4 backend (done 1 Oct 2026)
+
+- `GET /approval-requests` now returns `ReviewListItemOut`: the review plus `delivery` (`DeliverySummaryOut`: `job_state`, `run_at`, `sent_at`, `deferred_reason`, `total/sent/failed/pending/skipped`, sorted `group_names`) or null when it was never shared. **The latest job per review** (highest `action_version`) is summarised.
+- `ShareRepository.delivery_summaries(review_ids)` does it in a fixed four queries however many reviews are listed; the pure counting is `domain/sharing/summary.py`.
+- New `since` (date) query parameter: reviews for that day or later. The Reports page's Today / 7 days / 30 days will send it.
+- `/config/ui` gained `working_days` (Monday = 0) for the Settings Schedule card.
+- Tests: `tests/acceptance/test_reports_list.py` (9). `docs/openapi.json` regenerated.
+- The words ("Sent to 3 groups", "Partly sent 2/3", "Waiting for WhatsApp", "Held back") are **not** produced by the server on purpose: they depend on the current time and the WhatsApp connection. They belong in `apps/web/src/logic.ts::deliveryResult` (pure, tested).
+
+### Still to do: the M5 one-command installer (`install.cmd` + `install.ps1`, winget prerequisites, database / sheet URL / WhatsApp QR steps, a UTF-8 `README.md`) — see the plan file. Its service half is already done (above).

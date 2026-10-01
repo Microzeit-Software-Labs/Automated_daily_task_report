@@ -6,6 +6,8 @@ import type { components } from "./api-types";
 
 type S = components["schemas"];
 export type ApprovalRequest = S["ApprovalRequestOut"];
+export type ReviewListItem = S["ReviewListItemOut"];
+export type DeliverySummary = S["DeliverySummaryOut"];
 // `shares`/`has_image` have server-side defaults, so the generated types mark
 // them optional; api.review() and api.preview() always fill them in.
 export type ReviewDetail = S["ReviewDetailOut"] & { shares: Share[] };
@@ -99,12 +101,13 @@ export const api = {
   config: () => request<UiConfig>("GET", "/config/ui"),
   status: () => request<WhatsAppStatus>("GET", "/whatsapp/status"),
 
-  reviews: (params: { localDate?: string; limit?: number } = {}) => {
+  reviews: (params: { localDate?: string; since?: string; limit?: number } = {}) => {
     const q = new URLSearchParams();
     if (params.localDate) q.set("local_date", params.localDate);
+    if (params.since) q.set("since", params.since);
     if (params.limit) q.set("limit", String(params.limit));
     const qs = q.toString();
-    return request<ApprovalRequest[]>("GET", `/approval-requests${qs ? `?${qs}` : ""}`);
+    return request<ReviewListItem[]>("GET", `/approval-requests${qs ? `?${qs}` : ""}`);
   },
   review: async (id: string): Promise<ReviewDetail> => {
     const detail = await request<S["ReviewDetailOut"]>("GET", `/approval-requests/${id}`);
