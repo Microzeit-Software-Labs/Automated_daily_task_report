@@ -18,6 +18,15 @@
     Your postgres superuser password is read interactively and is never written
     to disk, never logged, and never passed on a command line.
 
+.PARAMETER SuperuserPassword
+    The postgres password as a SecureString, so a caller (install.ps1) can ask for
+    it once. Without it, you are asked.
+
+.PARAMETER KeepEnv
+    Reuse the passwords already in .env for the two roles and leave .env alone,
+    instead of generating new ones. For restoring the roles and databases behind
+    an .env you want to keep (a new PostgreSQL install, say).
+
 .EXAMPLE
     .\scripts\setup-database.ps1
 #>
@@ -28,7 +37,9 @@ param(
     [string]$PgHost   = "127.0.0.1",
     [int]   $Port     = 5432,
     [string]$Database = "interlock",
-    [string]$TestDatabase = "interlock_test"
+    [string]$TestDatabase = "interlock_test",
+    [System.Security.SecureString]$SuperuserPassword,
+    [switch]$KeepEnv
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,14 +51,17 @@ if (-not (Test-Path $PsqlPath)) {
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $envFile  = Join-Path $repoRoot ".env"
 
-if (Test-Path $envFile) {
+if ((Test-Path $envFile) -and -not $KeepEnv) {
     Write-Host ".env already exists. Provisioning would overwrite it." -ForegroundColor Yellow
     $reply = Read-Host "Overwrite? (y/N)"
     if ($reply -ne "y") { Write-Host "Aborted. Nothing changed."; return }
 }
 
 # --- Credentials -----------------------------------------------------------
-$secure = Read-Host "PostgreSQL superuser (postgres) password" -AsSecureString
+$secure = $SuperuserPassword
+if (-not $secure) {
+    $secure = Read-Host "PostgreSQL superuser (postgres) password" -AsSecureString
+}
 $bstr   = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
 try {
     $superPw = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
@@ -61,6 +75,21 @@ $alphabet = (48..57) + (65..90) + (97..122)
 $appPw    = -join ($alphabet | Get-Random -Count 32 | ForEach-Object { [char]$_ })
 $ownerPw  = -join ($alphabet | Get-Random -Count 32 | ForEach-Object { [char]$_ })
 
+# With -KeepEnv the roles are (re)created with the passwords .env already holds,
+# and .env is not rewritten.
+$writeEnv = $true
+if ($KeepEnv -and (Test-Path $envFile)) {
+    $envText = Get-Content $envFile -Raw
+    $mApp = [regex]::Match($envText, '(?m)^DATABASE_URL=postgresql\+psycopg://interlock_app:([^@\s]+)@')
+    $mOwn = [regex]::Match($envText, '(?m)^MIGRATION_DATABASE_URL=postgresql\+psycopg://interlock_owner:([^@\s]+)@')
+    if (-not ($mApp.Success -and $mOwn.Success)) {
+        throw "-KeepEnv: .env has no DATABASE_URL / MIGRATION_DATABASE_URL (interlock_app / interlock_owner) to keep."
+    }
+    $appPw   = $mApp.Groups[1].Value
+    $ownerPw = $mOwn.Groups[1].Value
+    $writeEnv = $false
+}
+
 function Invoke-Psql {
     param([string]$Db, [string]$Sql, [switch]$AllowFailure)
     # No `2>&1` here: in Windows PowerShell 5.1, merging a native exe's stderr
@@ -68,9 +97,11 @@ function Invoke-Psql {
     # under $ErrorActionPreference = "Stop", aborting the script on a harmless
     # warning. psql's own stderr prints straight to the console untouched;
     # $out only captures stdout, and $LASTEXITCODE is still the real exit code.
+    # -w: never stop and ask for a password. Without it, a wrong or empty password
+    # makes psql fall back to its own prompt on every single call.
     $env:PGPASSWORD = $superPw
     try {
-        $out = & $PsqlPath -U postgres -h $PgHost -p $Port -d $Db `
+        $out = & $PsqlPath -U postgres -h $PgHost -p $Port -d $Db -w `
                            -v ON_ERROR_STOP=1 -q -t -A -c $Sql
         if ($LASTEXITCODE -ne 0 -and -not $AllowFailure) {
             throw "psql failed (exit $LASTEXITCODE): $out"
@@ -79,6 +110,12 @@ function Invoke-Psql {
     } finally {
         Remove-Item Env:\PGPASSWORD -ErrorAction SilentlyContinue
     }
+}
+
+# Fail once, clearly, on a wrong password, before anything is changed.
+Invoke-Psql -Db "postgres" -Sql "SELECT 1;" -AllowFailure | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not sign in to PostgreSQL as 'postgres' (see the message above). Check the password, and that the PostgreSQL service is running. Nothing was changed."
 }
 
 Write-Host ""
@@ -157,6 +194,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE interlock_owner IN SCHEMA public
 }
 
 # --- .env ------------------------------------------------------------------
+if ($writeEnv) {
 $template = Get-Content (Join-Path $repoRoot ".env.example") -Raw
 $appUrl   = "postgresql+psycopg://interlock_app:$appPw@${PgHost}:$Port/$Database"
 $ownerUrl = "postgresql+psycopg://interlock_owner:$ownerPw@${PgHost}:$Port/$Database"
@@ -174,6 +212,9 @@ TEST_DATABASE_URL=$testUrl
 
 Set-Content -Path $envFile -Value $content -Encoding utf8
 Write-Host "  wrote .env" -ForegroundColor Green
+} else {
+    Write-Host "  kept the existing .env" -ForegroundColor DarkGray
+}
 
 $superPw = $null
 [System.GC]::Collect()

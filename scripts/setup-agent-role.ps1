@@ -32,6 +32,14 @@
     Writes apps/agent/.env. Never touches the project root .env or any
     other role.
 
+.PARAMETER SuperuserPassword
+    The postgres password as a SecureString, so a caller (install.ps1) can ask for
+    it once. Without it, you are asked.
+
+.PARAMETER KeepEnv
+    Reuse the password already in apps\agent\.env for the role and leave that file
+    alone, instead of generating a new one.
+
 .EXAMPLE
     .\scripts\setup-agent-role.ps1
 #>
@@ -41,7 +49,9 @@ param(
     [string]$PsqlPath = "C:\Program Files\PostgreSQL\16\bin\psql.exe",
     [string]$PgHost   = "127.0.0.1",
     [int]   $Port     = 5432,
-    [string]$Database = "interlock"
+    [string]$Database = "interlock",
+    [System.Security.SecureString]$SuperuserPassword,
+    [switch]$KeepEnv
 )
 
 $ErrorActionPreference = "Stop"
@@ -74,9 +84,10 @@ function Invoke-PsqlAs {
     param([string]$User, [string]$Password, [string]$Db, [string]$Sql, [switch]$AllowFailure)
     # See setup-database.ps1's identical helper for why stderr is left
     # unmerged under Windows PowerShell 5.1's $ErrorActionPreference = "Stop".
+    # -w: never stop and ask for a password (see setup-database.ps1).
     $env:PGPASSWORD = $Password
     try {
-        $out = & $PsqlPath -U $User -h $PgHost -p $Port -d $Db `
+        $out = & $PsqlPath -U $User -h $PgHost -p $Port -d $Db -w `
                            -v ON_ERROR_STOP=1 -q -t -A -c $Sql
         if ($LASTEXITCODE -ne 0 -and -not $AllowFailure) {
             throw "psql failed (exit $LASTEXITCODE): $out"
@@ -99,7 +110,10 @@ Write-Host ""
 Write-Host "Provisioning interlock_agent..." -ForegroundColor Cyan
 
 # --- Role: needs the Postgres superuser --------------------------------------
-$secure = Read-Host "PostgreSQL superuser (postgres) password" -AsSecureString
+$secure = $SuperuserPassword
+if (-not $secure) {
+    $secure = Read-Host "PostgreSQL superuser (postgres) password" -AsSecureString
+}
 $bstr   = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
 try {
     $superPw = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
@@ -107,8 +121,21 @@ try {
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
 }
 
+# Fail once, clearly, on a wrong password, before anything is changed.
+Invoke-PsqlAs -User "postgres" -Password $superPw -Db "postgres" -Sql "SELECT 1;" -AllowFailure | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not sign in to PostgreSQL as 'postgres' (see the message above). Check the password, and that the PostgreSQL service is running. Nothing was changed."
+}
+
 $alphabet = (48..57) + (65..90) + (97..122)
-$agentPw  = -join ($alphabet | Get-Random -Count 32 | ForEach-Object { [char]$_ })
+$agentPw  =-join ($alphabet | Get-Random -Count 32 | ForEach-Object { [char]$_ })
+$writeAgentEnv = $true
+if ($KeepEnv -and (Test-Path $agentEnv)) {
+    $kept = [regex]::Match((Get-Content $agentEnv -Raw), '(?m)^DATABASE_URL=postgresql://interlock_agent:([^@\s]+)@')
+    if (-not $kept.Success) { throw "-KeepEnv: apps\agent\.env has no interlock_agent DATABASE_URL to keep." }
+    $agentPw = $kept.Groups[1].Value
+    $writeAgentEnv = $false
+}
 
 $roleSql = @"
 DO `$`$
@@ -139,6 +166,7 @@ Invoke-PsqlAs -User $ownerUser -Password $ownerPw -Db $Database -Sql $grantSql |
 Write-Host "  privileges (whatsapp_agent_commands, whatsapp_agent_status only)" -ForegroundColor Green
 
 # --- apps/agent/.env ---------------------------------------------------------
+if ($writeAgentEnv) {
 if (-not (Test-Path $agentDir)) {
     New-Item -ItemType Directory -Path $agentDir | Out-Null
 }
@@ -151,6 +179,9 @@ LOG_LEVEL=info
 "@
 Set-Content -Path $agentEnv -Value $agentEnvContent -Encoding utf8
 Write-Host "  wrote apps\agent\.env" -ForegroundColor Green
+} else {
+    Write-Host "  kept the existing apps\agent\.env" -ForegroundColor DarkGray
+}
 
 Write-Host ""
 Write-Host "Done." -ForegroundColor Cyan
