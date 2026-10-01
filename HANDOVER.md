@@ -2,7 +2,7 @@
 
 **Project root:** `C:\Users\Admin\Documents\interlock`
 **Repo state:** git on `main`, remote `origin` = `github.com/kaifas-collab/Automatied_task`. **The user's rule: do not commit or push without their explicit approval.** On 1 Oct 2026 they approved committing and pushing **M1-M3** (`9d55b1f`, `9c7e841`: pushed), then approved committing **the background service and M4** (two local commits after `9c7e841`). **Those two are not pushed:** pushing needs its own go-ahead. `git stash list` is empty.
-**Phase status:** Phases 1–3 done and **in real use**: sheet import, approval, image reports and group sends have all run against real WhatsApp. A refinement round is in progress (§14): **M1-M4 done, plus the background service** (the first half of M5, built ahead of M4 at the user's request). The user has seen and approved M4. **Next: changing the Google Sheet link from the UI** (item 7 below), then the one-command installer.
+**Phase status:** Phases 1–3 done and **in real use**: sheet import, approval, image reports and group sends have all run against real WhatsApp. A refinement round is in progress (§14): **M1-M4 done, plus the background service and the sheet-link change** (the first half of M5, built ahead of M4 at the user's request). The user has seen and approved M4. The Google Sheet link can now be changed from the UI too (item 7, §14). **Next: the one-command installer.**
 
 ---
 
@@ -29,10 +29,7 @@ It's shared "anyone with the link can view". At 09:00 and 17:00 Interlock should
 4. **Background service: done** (1 Oct, the user asked for it before the rest of M4): the supervisor, `start-interlock.ps1` as a start/stop/status controller, and a login task. See §14.
 5. **M4** UI redesign (Reports page, report page, design system; Settings gets Sheet and Schedule cards): **done and committed (1 Oct); the user looked at it and is satisfied.** Verified in a real browser (§14).
 6. **M5** the one-command installer (`install.cmd`, winget prerequisites, the database/sheet/QR steps, README): **last**, as the user asked. Its service half already exists (item 4).
-7. **Next: add or change the Google Sheet link from the UI.** The user asked for it on 1 Oct and agreed it should work **like the WhatsApp linking**: a Settings card with the link and the last import ("Last read 11:52 · 96 tasks"), a **Change sheet / Connect a sheet** button, a step-by-step dialog (paste link → **Check**, showing the task count and first titles or a plain fix such as "Share → Anyone with the link → Viewer" → confirm → wait for the worker's first import → "96 tasks imported"), and a page-wide banner when the sheet can't be read. A failed check changes nothing; the new sheet is proven readable before it replaces the old. **Not started; get the user's go before building.** Three things the design must include (checked against the code on 1 Oct):
-   - **Task identity must include the sheet.** The importer matches by `sr:<Sr No.>` only, across hidden tasks too (`sheet_import_service.py` `tick`), and un-hides any matched task whose row isn't delegated (`_update`). So "hide the old sheet's tasks" alone would be undone on the next tick and old tasks overwritten by the new sheet's rows. Scope the ref to `<spreadsheetId>:<gid>|sr:<n>` with a one-off migration stamping today's tasks with the current sheet; retire the old sheet's tasks with their own marker, not the delegation one (switching back then restores them).
-   - **One source of truth: the database.** `.env`'s `SHEET_IMPORT_URL` only seeds it on first run; the M5 installer saves through the same check-and-save code. The worker reads the link every tick (today it is built once at startup in `workers/loop.py` `main`) and imports at once when it changes; `/config/ui` reads it from the database too. Keep refusing it alongside `SHEETS_PROVIDER=google` (`adapters/sheets/factory.py`).
-   - **Record the last import** (time, task count, or the error) so the card and the banner can show it; today a failed import only reaches `logs\worker.log`. Audit each link change.
+7. **Changing the Google Sheet from the UI: done (1 Oct), built like the WhatsApp linking** (a Settings card, a Check-then-Use dialog, a banner when the sheet can't be read). Deployed on this laptop: the real database is migrated (`b8e2f4a6c910`), the sheet was seeded from `.env` and read (98 rows), all 98 imported tasks were stamped with the sheet's scope, and the 93 visible tasks are identical to before. Details and decisions in §14. **Not yet seen by the user.**
 
 **Operational notes:**
 - **Interlock now runs as a hidden background service** (§14): `.\scripts\start-interlock.ps1` starts it (and opens the browser), `-Status` shows what is running, `-Stop`, `-Restart`, `-Console` (foreground, live logs). `.\scripts\register-autostart.ps1` (already run on 1 Oct) starts it at login. Logs: `logs\{api,worker,agent,supervisor}.log`. **Exactly one agent may run**; the supervisor, the agent's own lock and a start-up sweep all enforce it. Don't start things by hand next to the service.
@@ -394,18 +391,18 @@ The dynamic `import()` of Baileys was confirmed preserved in the compiled CJS, a
 **Model:** one-way, read-only. Every `SHEET_SYNC_INTERVAL_SECONDS` the worker:
 1. fetches the sheet's public CSV export;
 2. parses it (`domain/sync/sheet_import.py`, pure);
-3. mirrors each row into `tasks` (`services/sheet_import_service.py`), matched by `Sr No.` stored in `Task.external_row_ref` as `sr:<n>`, with `source = SHEET_IMPORT`.
+3. mirrors each row into `tasks` (`services/sheet_import_service.py`), matched by `Sr No.` stored in `Task.external_row_ref` as `<spreadsheetId>:<gid>|sr:<n>` (it was plain `sr:<n>` before 1 Oct: see "Changing the Google Sheet from the UI" in §14), with `source = SHEET_IMPORT`.
 
-Nothing is ever written to the sheet. It shares the worker's sheet slot with the two-way sync (§10) and is **mutually exclusive** with it: `build_sheet_import_fetch` raises if both are configured.
+Nothing is ever written to the sheet. It shares the worker's sheet slot with the two-way sync (§10) and is **mutually exclusive** with it: `build_sheet_reader` returns `None` (so the import is off and the link can't be changed) while `SHEETS_PROVIDER=google`. **Which sheet is read is now a saved setting in the database, changed from Settings (§14); `SHEET_IMPORT_URL` only seeds it once.**
 
 | Piece | Where |
 |---|---|
 | Parsing: headers, mixed date formats, status map, skips | `domain/sync/sheet_import.py` |
 | Fetch + link→export URL + "went private" guard | `adapters/sheets/csv_source.py` |
-| Factory + mutual exclusion | `adapters/sheets/factory.py::build_sheet_import_fetch` |
+| Factory + mutual exclusion | `adapters/sheets/factory.py::build_sheet_reader` |
 | The tick | `services/sheet_import_service.py` |
 | Read-only guard | `services/task_service.py::update` (refuses `SHEET_IMPORT` tasks) |
-| Worker wiring | `workers/loop.py::run_one_tick(sheet_import=...)` |
+| Worker wiring | `workers/loop.py::run_sheet_import`, called from `run_one_tick(sheet_reader=...)` |
 | Migration | `d3b8e61a0f47` (adds `SHEET_IMPORT` to `ck_tasks_source`) |
 | Read-only preview | `scripts/sheet_import_preview.py` |
 
@@ -598,4 +595,37 @@ The Reports page, the report page, the design system and the Settings cards, wit
 - Tests: `tests/acceptance/test_reports_list.py` (9). `docs/openapi.json` regenerated.
 - The words ("Sent to 3 groups", "Partly sent 2/3", "Waiting for WhatsApp", "Held back") are **not** produced by the server on purpose: they depend on the current time and the WhatsApp connection. They belong in `apps/web/src/logic.ts::deliveryResult` (pure, tested).
 
-### Still to do: the M5 one-command installer (`install.cmd` + `install.ps1`, winget prerequisites, database / sheet URL / WhatsApp QR steps, a UTF-8 `README.md`) — see the plan file. Its service half is already done (above).
+### Changing the Google Sheet from the UI (done 1 Oct 2026)
+
+Built **like the WhatsApp linking**, as the user asked: look before you switch, a failed attempt changes nothing, and a banner when it breaks. Settings → Google Sheet → **Connect a sheet / Change sheet** opens a dialog: paste the link → **Check** (reads the sheet, saves nothing, shows the task count and the most recent titles, or a plain reason: not shared (says how to share it), no such sheet, can't reach Google, missing columns (named), no tasks yet) → **Use this sheet** → it waits for the worker's first read → "96 tasks imported". User docs: `docs/sheet-import-setup.md`.
+
+| Piece | Where |
+|---|---|
+| Link parsing, scope, scoped refs, `SheetSourceState` (pure) | `domain/sync/sheet_source.py` |
+| The saved setting: one row, plus how the last read went | table `sheet_source` (migration `b8e2f4a6c910`), `adapters/persistence/{models/sheet_source,sheet_source_repository}.py` |
+| check / apply / `current` (seeds from `.env` once) / `classify_problem` | `services/sheet_source_service.py` |
+| API | `GET /sheet`, `POST /sheet/check` (always 200: an unusable sheet is an answer), `PUT /sheet` (re-checks, 422 with the problem's `code`, then saves) in `api/routers/sheet.py` |
+| Worker | `workers/loop.py::run_sheet_import`; `run_one_tick(sheet_reader=...)` replaced `sheet_import=` |
+| Reader factory | `adapters/sheets/factory.py::build_sheet_reader` (None while `SHEETS_PROVIDER=google`) |
+| UI | `components/{SheetLinkModal,SheetBanner}.tsx`, Settings `SheetCard`, `logic.ts` (`sheetStatus`, `sheetBanner`, `sheetProgress`, `looksLikeSheetLink`) |
+| Tests | `tests/unit/test_sheet_source.py`, `tests/integration/test_sheet_import_service.py` (`TestSwitchingSheets`), `tests/acceptance/test_change_sheet.py`, web `logic.test.ts` |
+
+**Decisions worth knowing:**
+- **A task now remembers which sheet it came from.** `external_row_ref` is `<spreadsheetId>:<gid>|sr:<n>` (was `sr:<n>`). Without this the importer matched the new sheet's `Sr No. 5` to the old sheet's task 5 (it matches hidden tasks too and un-hides non-delegated ones), so "hide the old sheet's tasks" was undone within a minute and old tasks were overwritten. Unscoped refs are "legacy"; the first time `SheetSourceService.current` seeds the setting it stamps them with the seeded sheet's scope (`stamp_legacy_refs`, only the ref changes: version and history untouched, idempotent). `row_number()` in the report table reads the number through `sr_no_of_ref`, so reports are unchanged.
+- **Switching retires, never deletes.** On the first import of a new sheet, visible imported tasks of any other scope get `deleted_at` and the tag `retired:sheet` (distinct from the delegation tag). Reading the old sheet again matches its tasks by ref and un-hides them (same ids, history intact; the tag is dropped in `_tags_for`). A task hidden for delegation is never given the retired tag. `ImportResult.retired` / `rows_read` are new.
+- **The database is the one source of truth.** `SHEET_IMPORT_URL` in `.env` only seeds `sheet_source` the first time (`create_if_absent`, race-safe); after that the saved link wins, so an old `.env` can't undo a change made in the browser. The M5 installer should save the link through `SheetSourceService.apply`, not by writing `.env`. `/config/ui.sheet_url` now comes from the database.
+- **Changes take effect without a restart.** The worker reads the saved setting every tick; `import_pending` (set by a save) makes it import at once instead of waiting out `SHEET_SYNC_INTERVAL_SECONDS`, then clears it. Every attempt records `last_attempt_at` / `last_success_at` / `last_task_count` / `last_error_code` / `last_error` for the card and the banner. Saving clears the old sheet's status (it described another sheet).
+- **The dialog never calls a switch done early.** After saving, the shared `["sheet"]` query is primed with the save's response (importing) before polling, otherwise the previous sheet's "last read" would read as success. `sheetProgress` goes `slow` after 90 s (the service isn't running).
+- **Safety:** only the spreadsheet id and tab survive from a pasted link; the export URL is rebuilt on `docs.google.com` (tested with a hostile link). Refused while the two-way sync (`SHEETS_PROVIDER=google`) owns the sheet (`changeable: false`, problem `TWO_WAY_SYNC`). Every change is audited (`SHEET_LINK_CHANGED`, `SHEET_SOURCE_SEEDED`).
+- The banner is silent while a new link is still being read, has no button for "can't reach Google" (nothing to fix; amber), and says what reports are using meanwhile ("Reports are using the tasks read at 12:50").
+
+**A bug found by the browser run, not by the tests (don't reintroduce):** the worker seeded the setting from `.env` and imported in one transaction; when that first import failed, the rollback also undid the seed, so the failure had no row to be recorded on and the banner never appeared. The seed is now committed before the import is attempted (`run_sheet_import`); `test_a_first_import_that_fails_is_still_recorded` pins it.
+
+**Test-environment traps hit while building it (don't repeat):**
+- A disposable demo server with its own worker thread must **never share `interlock_test` with a pytest run**: its worker re-seeds `sheet_source` and edits tasks while the tests truncate, producing failures that look like product bugs. Stop the demo (TaskStop) before running tests.
+- `pyproject` has `addopts = "-q"`: passing another `-q` makes it `-qq`, which prints **no summary line**. Run pytest without `-q` and read the "N passed" line (a run I thought all-green hadn't printed one).
+- The acceptance `_test_settings()` now pins `sheet_import_url=None`: the developer's real `.env` holds the real sheet's link, which must never seed a test database or be fetched by a test. Both TRUNCATE lists include `sheet_source`.
+
+**Verified in a real browser (25/25):** an unreadable env-seeded sheet raises the banner and the card says why; **Fix the sheet link** opens the dialog prefilled; a non-link disables Check; a private sheet says how to share it; wrong columns are named; checking saves nothing; a good sheet shows its count and recent tasks; saving shows "Reading your sheet…" then "3 tasks imported"; the banner clears and the card shows "Last read 12:55 · 3 tasks"; switching to another sheet warns "3 tasks from your current sheet will be hidden from reports", completes, hides the old tasks and shows the new; the same sheet is recognised; the dialog fits a 390 px phone; no console errors. The harness: a demo API on the test DB with a fake Google (`sheet_reader=`, canned sheets by id) and a mini worker thread calling `run_sheet_import` every 2 s, driven over CDP as in §14's M4 notes.
+
+### Still to do: the M5 one-command installer (`install.cmd` + `install.ps1`, winget prerequisites, database / sheet URL / WhatsApp QR steps, a UTF-8 `README.md`; its sheet step must save through `SheetSourceService.apply`, not write `.env`) — see the plan file. Its service half is already done (above).

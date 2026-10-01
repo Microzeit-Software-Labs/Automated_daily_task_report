@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import urllib.error
 from collections.abc import Iterator
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -34,6 +36,7 @@ from interlock.adapters.whatsapp.mock import MockWhatsAppProvider
 from interlock.api.main import create_app
 from interlock.config import ReportFormat, Settings
 from interlock.domain.common.clock import FrozenClock
+from interlock.domain.sync.sheet_source import SheetLink
 from interlock.services.review_service import ReviewService
 from interlock.services.review_trigger import TriggerResult, maybe_create_daily_reviews
 from interlock.services.scheduler_service import SchedulerService, TickResult
@@ -53,7 +56,9 @@ def _test_settings() -> Settings:
         pytest.skip("TEST_DATABASE_URL is not set. Run scripts/setup-database.ps1 first.")
     # The nine scenarios pin the text format (they assert on message text);
     # the image format has its own tests in test_image_reports.py.
-    return Settings(database_url=url, report_format=ReportFormat.TEXT)
+    # sheet_import_url=None: the developer's real .env holds the real sheet's link,
+    # which must never seed a test database or be fetched from a test.
+    return Settings(database_url=url, report_format=ReportFormat.TEXT, sheet_import_url=None)
 
 
 @pytest.fixture(scope="session")
@@ -85,7 +90,7 @@ def clean_db(_migrated: None) -> Iterator[None]:
                 "share_recipients, share_jobs, report_snapshots, task_history, "
                 "tasks, approval_requests, scheduled_actions, whatsapp_groups, "
                 "idempotency_keys, audit_logs, users, "
-                "whatsapp_agent_commands, whatsapp_agent_status "
+                "whatsapp_agent_commands, whatsapp_agent_status, sheet_source "
                 "RESTART IDENTITY CASCADE"
             )
         )
@@ -108,16 +113,54 @@ def sheets() -> FakeSpreadsheetProvider:
     return FakeSpreadsheetProvider()
 
 
+class FakeSheetReader:
+    """Stands in for fetching a Google Sheet's CSV: serves canned sheets by
+    spreadsheet id, and fails the way Google does for anything else."""
+
+    HEADER = "Sr No.,Date,Task,Status ,Note,Deadline \n"
+
+    def __init__(self) -> None:
+        self._sheets: dict[str, str | Exception] = {}
+        self.reads: list[str] = []
+
+    def serve(
+        self, spreadsheet_id: str, rows: str | Exception, *, header: str | None = None
+    ) -> None:
+        """``rows`` is CSV body lines (no header), or an exception to raise."""
+        self._sheets[spreadsheet_id] = (
+            rows if isinstance(rows, Exception) else (header or self.HEADER) + rows
+        )
+
+    def __call__(self, link: SheetLink) -> str:
+        self.reads.append(link.scope)
+        value = self._sheets.get(link.spreadsheet_id)
+        if value is None:
+            raise urllib.error.HTTPError(link.export_url, 404, "Not Found", Message(), None)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+
+@pytest.fixture
+def sheet_reader() -> FakeSheetReader:
+    return FakeSheetReader()
+
+
 @pytest.fixture
 def client(
     clean_db: None,
     clock: FrozenClock,
     whatsapp: MockWhatsAppProvider,
     sheets: FakeSpreadsheetProvider,
+    sheet_reader: FakeSheetReader,
 ) -> Iterator[TestClient]:
     settings = _test_settings()
     app = create_app(
-        settings=settings, clock=clock, whatsapp_provider=whatsapp, sheets_provider=sheets
+        settings=settings,
+        clock=clock,
+        whatsapp_provider=whatsapp,
+        sheets_provider=sheets,
+        sheet_reader=sheet_reader,
     )
     with TestClient(app) as test_client:
         yield test_client
@@ -190,5 +233,32 @@ def run_tick(whatsapp: MockWhatsAppProvider, *, now: dt.datetime) -> TickResult:
             result = service.tick(now=now)
             session.commit()
             return result
+    finally:
+        engine.dispose()
+
+
+def run_sheet_import(
+    reader: FakeSheetReader,
+    *,
+    now: dt.datetime,
+    interval_due: bool = False,
+    settings: Settings | None = None,
+) -> bool:
+    """One pass of the worker's sheet-import slot against a fresh engine and
+    session, standing in for the separate worker process (the same reasoning as
+    ``run_tick``). Returns whether an import was attempted."""
+    from interlock.adapters.persistence.base import make_session_factory
+    from interlock.workers.loop import run_sheet_import as _run
+
+    settings = settings or _test_settings()
+    engine = make_engine(settings.database_url)
+    try:
+        return _run(
+            make_session_factory(engine),
+            settings=settings,
+            now=now,
+            reader=reader,
+            interval_due=interval_due,
+        )
     finally:
         engine.dispose()

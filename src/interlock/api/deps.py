@@ -9,7 +9,7 @@ commits or rolls back as a unit.
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 from fastapi import Depends, Header, Request
 from sqlalchemy.orm import Session, sessionmaker
@@ -20,6 +20,7 @@ from interlock.adapters.persistence.models import UserRow
 from interlock.adapters.persistence.scheduler_repository import SchedulerRepository
 from interlock.adapters.persistence.sequences import PostgresSequences
 from interlock.adapters.persistence.share_repository import ShareRepository
+from interlock.adapters.persistence.sheet_source_repository import SheetSourceRepository
 from interlock.adapters.persistence.sync_repository import SyncRepository
 from interlock.adapters.persistence.task_repository import PostgresTaskRepository
 from interlock.adapters.persistence.whatsapp_group_repository import WhatsAppGroupRepository
@@ -31,9 +32,11 @@ from interlock.domain.ports.rendering import ReportImageRenderer
 from interlock.domain.ports.repositories import AuditSink, TaskRepository
 from interlock.domain.ports.sheets import SpreadsheetProvider
 from interlock.domain.ports.whatsapp import WhatsAppLinking, WhatsAppProvider
+from interlock.domain.sync.sheet_source import SheetLink
 from interlock.services.review_service import ReviewService
 from interlock.services.scheduler_service import SchedulerService
 from interlock.services.sharing_service import SharingService
+from interlock.services.sheet_source_service import SheetSourceService
 from interlock.services.sheet_sync_service import SheetSyncService
 from interlock.services.task_service import TaskService
 
@@ -63,6 +66,10 @@ def get_linking(request: Request) -> WhatsAppLinking:
 
 def get_sheets(request: Request) -> SpreadsheetProvider:
     return request.app.state.sheets  # type: ignore[no-any-return]
+
+
+def get_sheet_reader(request: Request) -> Callable[[SheetLink], str] | None:
+    return request.app.state.sheet_reader  # type: ignore[no-any-return]
 
 
 def get_image_renderer(request: Request) -> ReportImageRenderer | None:
@@ -225,6 +232,21 @@ def get_sheet_sync_service(
 ) -> SheetSyncService:
     return SheetSyncService(
         sheets=sheets, sync_repo=sync_repo, task_repo=task_repo, audit=audit
+    )
+
+
+def get_sheet_source_service(
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings_dep),
+    reader: Callable[[SheetLink], str] | None = Depends(get_sheet_reader),
+) -> SheetSourceService:
+    return SheetSourceService(
+        repo=SheetSourceRepository(session),
+        task_repo=PostgresTaskRepository(session),
+        audit=PostgresAuditSink(session),
+        tz=settings.tz,
+        reader=reader,
+        seed_url=settings.sheet_import_url,
     )
 
 

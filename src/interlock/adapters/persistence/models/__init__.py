@@ -13,6 +13,7 @@ from interlock.adapters.persistence.models.approvals import (
 from interlock.adapters.persistence.models.audit import AuditLogRow
 from interlock.adapters.persistence.models.idempotency import IdempotencyKeyRow
 from interlock.adapters.persistence.models.scheduler import ScheduledActionRow
+from interlock.adapters.persistence.models.sheet_source import SheetSourceRow
 from interlock.adapters.persistence.models.sync import SyncConflictRow, TaskSheetSyncRow
 from interlock.adapters.persistence.models.tasks import TaskHistoryRow, TaskRow
 from interlock.adapters.persistence.models.users import UserRow
@@ -30,6 +31,7 @@ __all__ = [
     "ScheduledActionRow",
     "ShareJobRow",
     "ShareRecipientRow",
+    "SheetSourceRow",
     "SyncConflictRow",
     "TaskHistoryRow",
     "TaskRow",

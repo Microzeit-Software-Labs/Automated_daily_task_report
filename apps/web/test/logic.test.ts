@@ -6,6 +6,7 @@ import {
   errorFromBody,
   type Group,
   type Share,
+  type SheetSource,
 } from "../src/api";
 import {
   defaultRecipientIds,
@@ -18,6 +19,7 @@ import {
   isSettling,
   linkView,
   localDateIn,
+  looksLikeSheetLink,
   matchesFilter,
   nextReport,
   periodStart,
@@ -26,6 +28,9 @@ import {
   resolveSendAt,
   shareButtonLabel,
   shiftDate,
+  sheetBanner,
+  sheetProgress,
+  sheetStatus,
   showPromptOn,
   untilLabel,
   whatsappBanner,
@@ -575,6 +580,167 @@ describe("reportBanner", () => {
       whatsappDown: true,
     });
     expect(banner).toMatchObject({ tone: "warn", title: "Waiting for WhatsApp" });
+  });
+});
+
+// -- Google Sheet ------------------------------------------------------------
+
+function sheet(overrides: Partial<SheetSource> = {}): SheetSource {
+  return {
+    configured: true,
+    url: "https://docs.google.com/spreadsheets/d/abc/edit#gid=0",
+    changeable: true,
+    importing: false,
+    last_attempt_at: "2026-09-15T11:30:00Z",
+    last_success_at: "2026-09-15T11:30:00Z",
+    last_task_count: 96,
+    last_error_code: null,
+    last_error: null,
+    ...overrides,
+  };
+}
+
+describe("looksLikeSheetLink", () => {
+  it("accepts a link copied from the browser", () => {
+    expect(looksLikeSheetLink("https://docs.google.com/spreadsheets/d/1AbC_-x/edit#gid=0")).toBe(true);
+    expect(looksLikeSheetLink("  https://docs.google.com/spreadsheets/d/abc/edit  ")).toBe(true);
+  });
+
+  it("refuses anything else", () => {
+    for (const text of ["", "   ", "my tasks", "https://example.com/doc", "https://docs.google.com/document/d/abc"]) {
+      expect(looksLikeSheetLink(text)).toBe(false);
+    }
+  });
+});
+
+describe("sheetStatus", () => {
+  const now = new Date("2026-09-15T11:35:00Z");
+
+  it("says there is no sheet when none is connected", () => {
+    expect(sheetStatus(sheet({ configured: false, url: null }), IST, now)).toMatchObject({
+      tone: "neutral",
+      title: "No sheet is connected.",
+    });
+  });
+
+  it("shows when it was last read and how many tasks it held", () => {
+    expect(sheetStatus(sheet(), IST, now)).toEqual({
+      tone: "go",
+      title: "Last read 17:00 · 96 tasks",
+    });
+    expect(sheetStatus(sheet({ last_task_count: 1 }), IST, now).title).toBe("Last read 17:00 · 1 task");
+  });
+
+  it("says it is reading while a new link is being imported", () => {
+    expect(sheetStatus(sheet({ importing: true, last_success_at: null }), IST, now)).toMatchObject({
+      tone: "info",
+      title: "Reading the sheet…",
+    });
+  });
+
+  it("says why it could not read, and what the reports are using meanwhile", () => {
+    const status = sheetStatus(
+      sheet({ last_error_code: "NOT_SHARED", last_error: "Google wouldn't let Interlock read it." }),
+      IST,
+      now,
+    );
+
+    expect(status.tone).toBe("stop");
+    expect(status.title).toBe("Couldn't read the sheet at 17:00");
+    expect(status.detail).toContain("Google wouldn't let Interlock read it.");
+    expect(status.detail).toContain("Reports are using the tasks read at 17:00.");
+  });
+
+  it("says so when nothing has ever been read", () => {
+    const status = sheetStatus(
+      sheet({ last_success_at: null, last_error_code: "NOT_FOUND", last_error: "No such sheet." }),
+      IST,
+      now,
+    );
+
+    expect(status.detail).toContain("No tasks have been read from it yet.");
+  });
+
+  it("a lost internet connection is a warning, not a failure", () => {
+    const status = sheetStatus(sheet({ last_error_code: "UNREACHABLE", last_error: "No internet." }), IST, now);
+
+    expect(status.tone).toBe("warn");
+  });
+
+  it("a freshly saved sheet waits for its first read", () => {
+    expect(
+      sheetStatus(sheet({ last_attempt_at: null, last_success_at: null, last_task_count: null }), IST, now).title,
+    ).toBe("Waiting for the first read…");
+  });
+});
+
+describe("sheetBanner", () => {
+  const now = new Date("2026-09-15T11:35:00Z");
+  const broken = { last_error_code: "NOT_SHARED", last_error: "Google wouldn't let Interlock read it." };
+
+  it("is silent when the sheet is fine, unset, or still being read", () => {
+    expect(sheetBanner(undefined, IST, now)).toBeNull();
+    expect(sheetBanner(sheet(), IST, now)).toBeNull();
+    expect(sheetBanner(sheet({ configured: false }), IST, now)).toBeNull();
+    expect(sheetBanner(sheet({ ...broken, importing: true }), IST, now)).toBeNull();
+  });
+
+  it("offers the fix when the sheet can't be read", () => {
+    expect(sheetBanner(sheet(broken), IST, now)).toMatchObject({
+      tone: "warn", // reports still have the tasks from the last good read
+      title: "Your Google Sheet can't be read",
+      action: "fix",
+      actionLabel: "Fix the sheet link",
+    });
+  });
+
+  it("is a stop when nothing was ever read", () => {
+    expect(sheetBanner(sheet({ ...broken, last_success_at: null }), IST, now)?.tone).toBe("stop");
+  });
+
+  it("says what the reports are using meanwhile", () => {
+    expect(sheetBanner(sheet(broken), IST, now)?.message).toContain("Reports are using the tasks read at 17:00.");
+  });
+
+  it("offers nothing to fix when Google can't be reached", () => {
+    const banner = sheetBanner(sheet({ last_error_code: "UNREACHABLE", last_error: "No internet." }), IST, now);
+
+    expect(banner).toMatchObject({ tone: "warn", title: "Can't reach Google Sheets right now", action: null });
+  });
+
+  it("offers nothing while the two-way sync owns the sheet", () => {
+    expect(sheetBanner(sheet({ ...broken, changeable: false }), IST, now)?.action).toBeNull();
+  });
+});
+
+describe("sheetProgress", () => {
+  const started = 1_000_000;
+
+  it("is importing until the worker has acted", () => {
+    expect(sheetProgress(sheet({ importing: true, last_success_at: null }), started, started + 5_000)).toBe("importing");
+    expect(sheetProgress(undefined, started, started + 5_000)).toBe("importing");
+  });
+
+  it("is done once the worker read it", () => {
+    expect(sheetProgress(sheet(), started, started + 5_000)).toBe("done");
+  });
+
+  it("has failed once the worker wrote down why not", () => {
+    expect(
+      sheetProgress(sheet({ last_error_code: "NOT_SHARED", last_error: "no" }), started, started + 5_000),
+    ).toBe("failed");
+  });
+
+  it("goes slow when the worker doesn't answer for a minute and a half", () => {
+    const waiting = sheet({ importing: true, last_success_at: null });
+
+    expect(sheetProgress(waiting, started, started + 89_000)).toBe("importing");
+    expect(sheetProgress(waiting, started, started + 91_000)).toBe("slow");
+  });
+
+  it("never reports done for a sheet whose pending import hasn't started", () => {
+    // Saved, not yet imported: still marked importing, whatever an older read says.
+    expect(sheetProgress(sheet({ importing: true }), started, started + 1_000)).toBe("importing");
   });
 });
 

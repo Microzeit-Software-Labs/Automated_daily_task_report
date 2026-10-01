@@ -233,3 +233,117 @@ class TestImportedTasksAreReadOnlyInTheApp:
 
         saved = service.update(own.id, {"title": "Renamed"}, expected_version=1, actor=KAIF)
         assert saved.title == "Renamed"
+
+
+class TestSwitchingSheets:
+    """Tasks belong to the sheet they came from: the same Sr No. in another
+    sheet is a different task, and a sheet no longer in use is retired, not
+    deleted, so reading it again brings its own tasks back."""
+
+    A = "sheetA:0"
+    B = "sheetB:0"
+
+    @staticmethod
+    def scoped_tick(
+        session: Session, scope: str, body: str, *, now: dt.datetime = T0
+    ) -> ImportResult:
+        return SheetImportService(
+            fetch=lambda: HEADER + body,
+            task_repo=PostgresTaskRepository(session),
+            audit=PostgresAuditSink(session),
+            tz=TZ,
+            scope=scope,
+        ).tick(now=now)
+
+    def test_refs_carry_the_sheet(self, db_session: Session) -> None:
+        self.scoped_tick(db_session, self.A, "1,29-04-2026,Alpha,Pending,,\n")
+
+        assert set(imported(db_session)) == {"sheetA:0|sr:1"}
+
+    def test_the_same_sr_no_in_another_sheet_is_a_new_task(self, db_session: Session) -> None:
+        self.scoped_tick(db_session, self.A, "1,29-04-2026,Alpha,Pending,,\n")
+        first = imported(db_session)["sheetA:0|sr:1"]
+
+        result = self.scoped_tick(db_session, self.B, "1,29-04-2026,Beta,Pending,,\n", now=T1)
+
+        tasks = imported(db_session)
+        assert result.created == 1
+        assert tasks["sheetB:0|sr:1"].id != first.id
+        assert tasks["sheetB:0|sr:1"].title == "Beta"
+        assert tasks["sheetA:0|sr:1"].title == "Alpha"  # untouched by B's row
+
+    def test_the_old_sheets_tasks_are_retired_not_deleted(self, db_session: Session) -> None:
+        self.scoped_tick(
+            db_session, self.A, "1,29-04-2026,Alpha,Pending,,\n2,29-04-2026,Alpha 2,Closed,,\n"
+        )
+
+        result = self.scoped_tick(db_session, self.B, "1,29-04-2026,Beta,Pending,,\n", now=T1)
+
+        assert result.retired == 2
+        assert result.changed_anything
+        old = imported(db_session)["sheetA:0|sr:1"]
+        assert old.is_deleted
+        assert "retired:sheet" in old.tags
+        assert old.version == 2
+        assert audit_actions(db_session, old.id) == [
+            ("TASK_CREATED", "SYNC"),
+            ("TASK_UPDATED", "SYNC"),
+        ]
+
+    def test_retired_tasks_are_out_of_reports(self, db_session: Session) -> None:
+        self.scoped_tick(db_session, self.A, "1,29-04-2026,Alpha,Pending,,\n")
+        self.scoped_tick(db_session, self.B, "1,29-04-2026,Beta,Pending,,\n", now=T1)
+
+        visible = PostgresTaskRepository(db_session).list(TaskFilter())
+
+        assert [t.title for t in visible] == ["Beta"]
+
+    def test_reading_the_old_sheet_again_restores_its_own_tasks(self, db_session: Session) -> None:
+        self.scoped_tick(db_session, self.A, "1,29-04-2026,Alpha,Pending,,\n")
+        original = imported(db_session)["sheetA:0|sr:1"]
+        self.scoped_tick(db_session, self.B, "1,29-04-2026,Beta,Pending,,\n", now=T1)
+
+        result = self.scoped_tick(
+            db_session, self.A, "1,29-04-2026,Alpha,Pending,,\n", now=T1 + dt.timedelta(minutes=1)
+        )
+
+        back = imported(db_session)["sheetA:0|sr:1"]
+        assert back.id == original.id
+        assert not back.is_deleted
+        assert "retired:sheet" not in back.tags
+        assert result.unhidden == 1
+        assert imported(db_session)["sheetB:0|sr:1"].is_deleted  # B is now the retired one
+
+    def test_a_task_hidden_for_delegation_is_not_given_a_retired_marker(
+        self, db_session: Session
+    ) -> None:
+        self.scoped_tick(db_session, self.A, "1,29-04-2026,Handed over,Subhan's Task,,\n")
+        before = imported(db_session)["sheetA:0|sr:1"]
+        assert before.is_deleted
+
+        result = self.scoped_tick(db_session, self.B, "1,29-04-2026,Beta,Pending,,\n", now=T1)
+
+        after = imported(db_session)["sheetA:0|sr:1"]
+        assert result.retired == 0
+        assert after.tags == before.tags  # still just the delegation tag
+        assert after.version == before.version
+
+    def test_without_a_scope_nothing_is_retired(self, db_session: Session) -> None:
+        tick(db_session, "1,29-04-2026,Alpha,Pending,,\n")
+
+        result = tick(db_session, "2,29-04-2026,Beta,Pending,,\n", now=T1)
+
+        assert result.retired == 0
+        assert not imported(db_session)["sr:1"].is_deleted
+
+    def test_it_reports_how_many_tasks_the_sheet_holds(self, db_session: Session) -> None:
+        result = self.scoped_tick(
+            db_session,
+            self.A,
+            "1,29-04-2026,One,Pending,,\n"
+            "2,29-04-2026,Two,Pending,,\n"
+            ",29-04-2026,No number,Pending,,\n",
+        )
+
+        assert result.rows_read == 2
+        assert len(result.skipped) == 1

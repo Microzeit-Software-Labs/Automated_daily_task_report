@@ -7,14 +7,14 @@ providers for the same ``SHEETS_PROVIDER`` setting.
 
 from __future__ import annotations
 
-import functools
 from collections.abc import Callable
 
-from interlock.adapters.sheets.csv_source import export_url_from_sheet_link, fetch_csv
+from interlock.adapters.sheets.csv_source import fetch_csv
 from interlock.adapters.sheets.fake import FakeSpreadsheetProvider
 from interlock.adapters.sheets.google_sheets import GoogleSheetsProvider
 from interlock.config import Settings, SheetsProviderName
 from interlock.domain.ports.sheets import SpreadsheetProvider
+from interlock.domain.sync.sheet_source import SheetLink
 
 
 def build_sheets_provider(settings: Settings) -> SpreadsheetProvider:
@@ -32,17 +32,15 @@ def build_sheets_provider(settings: Settings) -> SpreadsheetProvider:
     )
 
 
-def build_sheet_import_fetch(settings: Settings) -> Callable[[], str] | None:
-    """The read-only sheet import's fetch function, or ``None`` when
-    ``SHEET_IMPORT_URL`` is unset. Refuses to coexist with the two-way sync:
-    both would create tasks from a sheet, and the two-way sync would then
-    write the imported ones back out into its own tab."""
-    if not settings.sheet_import_url:
-        return None
+def build_sheet_reader(settings: Settings) -> Callable[[SheetLink], str] | None:
+    """What reads a sheet's CSV for the read-only import, or ``None`` when the
+    two-way sync (``SHEETS_PROVIDER=google``) owns the sheet. The two would both
+    create tasks from a sheet, and the two-way sync would then write the imported
+    ones back out into its own tab, so they never coexist."""
     if settings.sheets_provider is SheetsProviderName.GOOGLE:
-        raise RuntimeError(
-            "SHEET_IMPORT_URL and SHEETS_PROVIDER=google are mutually exclusive -- "
-            "choose the read-only import or the two-way sync, not both. "
-            "See docs/sheet-import-setup.md."
-        )
-    return functools.partial(fetch_csv, export_url_from_sheet_link(settings.sheet_import_url))
+        return None
+    return _read_link
+
+
+def _read_link(link: SheetLink) -> str:
+    return fetch_csv(link.export_url)

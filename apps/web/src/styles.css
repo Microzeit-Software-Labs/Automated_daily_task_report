@@ -565,3 +565,8 @@ a.row:hover { border-color: var(--accent); }
 .center { text-align: center; }
 .actions.inline { margin-top: 0; }
 code { font-size: 0.9em; background: var(--sunk); padding: 1px 5px; border-radius: 4px; }
+
+/* Google Sheet link dialog and card */
+.sheet-form { margin-top: var(--s3); }
+.sheet-problem { margin-top: var(--s3); }
+.sheet-url { overflow-wrap: anywhere; }

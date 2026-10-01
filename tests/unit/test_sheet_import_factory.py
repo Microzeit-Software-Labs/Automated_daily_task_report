@@ -1,30 +1,19 @@
-"""build_sheet_import_fetch: off unless configured, and never alongside the
-two-way sync."""
+"""build_sheet_reader: the read-only import reads links, unless the two-way
+sync owns the sheet."""
 
 from __future__ import annotations
 
-import pytest
-
-from interlock.adapters.sheets.factory import build_sheet_import_fetch
+from interlock.adapters.sheets.factory import build_sheet_reader
 from interlock.config import Settings, SheetsProviderName
 
-LINK = "https://docs.google.com/spreadsheets/d/abc123/edit#gid=0"
+
+def test_reads_links_by_default() -> None:
+    assert callable(build_sheet_reader(Settings()))
 
 
-def test_off_by_default() -> None:
-    assert build_sheet_import_fetch(Settings(sheet_import_url=None)) is None
+def test_a_configured_link_changes_nothing_about_that() -> None:
+    assert callable(build_sheet_reader(Settings(sheet_import_url="https://x/spreadsheets/d/abc/edit")))
 
 
-def test_on_when_a_link_is_set() -> None:
-    assert callable(build_sheet_import_fetch(Settings(sheet_import_url=LINK)))
-
-
-def test_refuses_to_run_alongside_the_two_way_sync() -> None:
-    settings = Settings(sheet_import_url=LINK, sheets_provider=SheetsProviderName.GOOGLE)
-    with pytest.raises(RuntimeError, match="mutually exclusive"):
-        build_sheet_import_fetch(settings)
-
-
-def test_a_bad_link_fails_at_startup_not_at_the_first_tick() -> None:
-    with pytest.raises(ValueError, match="Google Sheets link"):
-        build_sheet_import_fetch(Settings(sheet_import_url="https://example.com"))
+def test_is_off_while_the_two_way_sync_owns_the_sheet() -> None:
+    assert build_sheet_reader(Settings(sheets_provider=SheetsProviderName.GOOGLE)) is None

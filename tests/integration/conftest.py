@@ -77,7 +77,7 @@ def migrated_engine() -> Iterator[Engine]:
                 "share_recipients, share_jobs, report_snapshots, task_history, "
                 "tasks, approval_requests, scheduled_actions, whatsapp_groups, "
                 "idempotency_keys, audit_logs, users, "
-                "whatsapp_agent_commands, whatsapp_agent_status "
+                "whatsapp_agent_commands, whatsapp_agent_status, sheet_source "
                 "RESTART IDENTITY CASCADE"
             )
         )

@@ -8,6 +8,7 @@ configure. When it hasn't been built, ``/`` falls back to ``/docs``.
 
 from __future__ import annotations
 
+import datetime as dt
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI
@@ -17,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from interlock.api import deps
 from interlock.api.schemas import UiConfigOut
 from interlock.config import Settings
+from interlock.services.sheet_source_service import SheetSourceService
 
 WEB_DIST = Path(__file__).resolve().parents[4] / "apps" / "web" / "dist"
 
@@ -24,14 +26,19 @@ router = APIRouter(tags=["ui"])
 
 
 @router.get("/config/ui", response_model=UiConfigOut)
-def ui_config(settings: Settings = Depends(deps.get_settings_dep)) -> UiConfigOut:
+def ui_config(
+    settings: Settings = Depends(deps.get_settings_dep),
+    sheets: SheetSourceService = Depends(deps.get_sheet_source_service),
+    now: dt.datetime = Depends(deps.now_dep),
+) -> UiConfigOut:
+    sheet = sheets.current(now=now)
     return UiConfigOut(
         timezone=settings.timezone,
         morning_alert_time=settings.morning_alert_time,
         evening_alert_time=settings.evening_alert_time,
         working_days=sorted(settings.working_days),
         allow_custom_send_time=settings.allow_custom_send_time,
-        sheet_url=settings.sheet_import_url,
+        sheet_url=sheet.url if sheet else None,
         user_name=settings.default_user_name,
     )
 

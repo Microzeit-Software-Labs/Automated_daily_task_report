@@ -1552,6 +1552,144 @@
         }
       }
     },
+    "/sheet": {
+      "get": {
+        "tags": [
+          "sheet"
+        ],
+        "summary": "Get Sheet",
+        "description": "The saved sheet and how the last read of it went.",
+        "operationId": "get_sheet_sheet_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SheetSourceOut"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "sheet"
+        ],
+        "summary": "Change Sheet",
+        "description": "Use this sheet. Re-checks it; 422 (with the problem's ``code``) if it\ncan't be read, and then nothing is saved. The worker imports it within about\nhalf a minute; ``importing`` is true until it has.",
+        "operationId": "change_sheet_sheet_put",
+        "parameters": [
+          {
+            "name": "x-actor-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Actor-Id"
+            }
+          },
+          {
+            "name": "x-actor-name",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Actor-Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SheetCheckRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SheetSourceOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sheet/check": {
+      "post": {
+        "tags": [
+          "sheet"
+        ],
+        "summary": "Check Sheet",
+        "description": "Read the pasted link and say what is in it, or why it can't be used.\nSaves nothing. Always 200: an unusable sheet is an answer, not an error.",
+        "operationId": "check_sheet_sheet_check_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SheetCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SheetCheckOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/notifications/prompt": {
       "get": {
         "tags": [
@@ -2562,6 +2700,195 @@
           "error_detail"
         ],
         "title": "ShareRecipientOut"
+      },
+      "SheetCheckOut": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SheetProblemOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tab": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tab"
+          },
+          "task_count": {
+            "type": "integer",
+            "title": "Task Count",
+            "default": 0
+          },
+          "sample_titles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sample Titles",
+            "default": []
+          },
+          "skipped": {
+            "type": "integer",
+            "title": "Skipped",
+            "default": 0
+          },
+          "will_hide": {
+            "type": "integer",
+            "title": "Will Hide",
+            "default": 0
+          },
+          "same_sheet": {
+            "type": "boolean",
+            "title": "Same Sheet",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "title": "SheetCheckOut",
+        "description": "What reading a pasted link found. Nothing was saved."
+      },
+      "SheetCheckRequest": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "SheetCheckRequest"
+      },
+      "SheetProblemOut": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "SheetProblemOut"
+      },
+      "SheetSourceOut": {
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "title": "Configured"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "changeable": {
+            "type": "boolean",
+            "title": "Changeable",
+            "default": true
+          },
+          "importing": {
+            "type": "boolean",
+            "title": "Importing",
+            "default": false
+          },
+          "last_attempt_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempt At"
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success At"
+          },
+          "last_task_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Task Count"
+          },
+          "last_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Code"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "configured"
+        ],
+        "title": "SheetSourceOut",
+        "description": "Which sheet the tasks come from, and how the last read of it went."
       },
       "SnoozeRequest": {
         "properties": {

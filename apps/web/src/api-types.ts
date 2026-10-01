@@ -459,6 +459,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sheet": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Sheet
+         * @description The saved sheet and how the last read of it went.
+         */
+        get: operations["get_sheet_sheet_get"];
+        /**
+         * Change Sheet
+         * @description Use this sheet. Re-checks it; 422 (with the problem's ``code``) if it
+         *     can't be read, and then nothing is saved. The worker imports it within about
+         *     half a minute; ``importing`` is true until it has.
+         */
+        put: operations["change_sheet_sheet_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sheet/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check Sheet
+         * @description Read the pasted link and say what is in it, or why it can't be used.
+         *     Saves nothing. Always 200: an unusable sheet is an answer, not an error.
+         */
+        post: operations["check_sheet_sheet_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/notifications/prompt": {
         parameters: {
             query?: never;
@@ -819,6 +866,84 @@ export interface components {
             error_code: string | null;
             /** Error Detail */
             error_detail: string;
+        };
+        /**
+         * SheetCheckOut
+         * @description What reading a pasted link found. Nothing was saved.
+         */
+        SheetCheckOut: {
+            /** Ok */
+            ok: boolean;
+            problem?: components["schemas"]["SheetProblemOut"] | null;
+            /** Tab */
+            tab?: string | null;
+            /**
+             * Task Count
+             * @default 0
+             */
+            task_count: number;
+            /**
+             * Sample Titles
+             * @default []
+             */
+            sample_titles: string[];
+            /**
+             * Skipped
+             * @default 0
+             */
+            skipped: number;
+            /**
+             * Will Hide
+             * @default 0
+             */
+            will_hide: number;
+            /**
+             * Same Sheet
+             * @default false
+             */
+            same_sheet: boolean;
+        };
+        /** SheetCheckRequest */
+        SheetCheckRequest: {
+            /** Url */
+            url: string;
+        };
+        /** SheetProblemOut */
+        SheetProblemOut: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /**
+         * SheetSourceOut
+         * @description Which sheet the tasks come from, and how the last read of it went.
+         */
+        SheetSourceOut: {
+            /** Configured */
+            configured: boolean;
+            /** Url */
+            url?: string | null;
+            /**
+             * Changeable
+             * @default true
+             */
+            changeable: boolean;
+            /**
+             * Importing
+             * @default false
+             */
+            importing: boolean;
+            /** Last Attempt At */
+            last_attempt_at?: string | null;
+            /** Last Success At */
+            last_success_at?: string | null;
+            /** Last Task Count */
+            last_task_count?: number | null;
+            /** Last Error Code */
+            last_error_code?: string | null;
+            /** Last Error */
+            last_error?: string | null;
         };
         /** SnoozeRequest */
         SnoozeRequest: {
@@ -1992,6 +2117,95 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SyncConflictOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_sheet_sheet_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SheetSourceOut"];
+                };
+            };
+        };
+    };
+    change_sheet_sheet_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-actor-id"?: string | null;
+                "x-actor-name"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SheetCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SheetSourceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    check_sheet_sheet_check_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SheetCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SheetCheckOut"];
                 };
             };
             /** @description Validation Error */

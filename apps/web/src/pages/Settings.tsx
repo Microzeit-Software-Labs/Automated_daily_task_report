@@ -1,57 +1,85 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { api, type UiConfig, type WhatsAppStatus } from "../api";
-import { formatTime, workingDaysLabel } from "../logic";
-import { ErrorNote } from "../ui";
+import { api, type SheetSource, type UiConfig, type WhatsAppStatus } from "../api";
+import { formatTime, sheetStatus, workingDaysLabel } from "../logic";
+import { Chip, ErrorNote } from "../ui";
+import { useNow } from "../useNow";
 
 export function Settings({
   config,
   status,
+  sheet,
   onLink,
+  onChangeSheet,
 }: {
   config: UiConfig;
   status: WhatsAppStatus | undefined;
+  sheet: SheetSource | undefined;
   onLink: () => void;
+  onChangeSheet: () => void;
 }) {
   return (
     <div className="page page-narrow stack">
       <div className="page-head">
         <div>
           <h1>Settings</h1>
-          <p className="muted">How Interlock is connected. The sheet and schedule are set in the configuration file.</p>
+          <p className="muted">How Interlock is connected. The schedule is set in the configuration file.</p>
         </div>
       </div>
       <WhatsAppCard config={config} status={status} onLink={onLink} />
-      <SheetCard config={config} />
+      <SheetCard config={config} sheet={sheet} onChange={onChangeSheet} />
       <ScheduleCard config={config} />
     </div>
   );
 }
 
-function SheetCard({ config }: { config: UiConfig }) {
+function SheetCard({
+  config,
+  sheet,
+  onChange,
+}: {
+  config: UiConfig;
+  sheet: SheetSource | undefined;
+  onChange: () => void;
+}) {
+  const now = useNow(30_000);
+  const status = sheetStatus(sheet, config.timezone, now);
+  const connected = !!sheet?.configured;
   return (
     <section className="card">
-      <h2>Google Sheet</h2>
-      {config.sheet_url ? (
-        <>
-          <p>
-            Tasks are read from{" "}
-            <a href={config.sheet_url} target="_blank" rel="noreferrer">
-              your Google Sheet
-            </a>
-            . Edit them there; changes appear here within a minute.
-          </p>
-          <p className="muted small">
-            Interlock only reads the sheet and never changes it. Rows marked as another person's task are left out of
-            reports.
-          </p>
-        </>
-      ) : (
-        <p className="muted">
-          No sheet is connected, so reports use the tasks stored in Interlock. To import from a Google Sheet, set{" "}
-          <code>SHEET_IMPORT_URL</code> (see docs/sheet-import-setup.md).
+      <div className="card-head">
+        <div>
+          <h2>Google Sheet</h2>
+          {connected && sheet.url ? (
+            <p className="sheet-url">
+              Tasks are read from{" "}
+              <a href={sheet.url} target="_blank" rel="noreferrer">
+                your Google Sheet
+              </a>
+              . Edit them there; changes appear here within a minute.
+            </p>
+          ) : (
+            <p className="muted">No sheet is connected, so there are no tasks to report on.</p>
+          )}
+        </div>
+        {sheet?.changeable === false ? null : (
+          <button className={connected ? "btn" : "btn btn-primary"} onClick={onChange} disabled={!sheet}>
+            {connected ? "Change sheet" : "Connect a sheet"}
+          </button>
+        )}
+      </div>
+      <p>
+        <Chip tone={status.tone}>{status.title}</Chip>
+      </p>
+      {status.detail && <p className="field-error">{status.detail}</p>}
+      {sheet?.changeable === false && (
+        <p className="muted small">
+          The two-way Google Sheets sync is turned on and manages the sheet, so the link can't be changed here.
         </p>
       )}
+      <p className="muted small">
+        Interlock only reads the sheet and never changes it. Rows marked as another person's task are left out of reports.
+      </p>
     </section>
   );
 }

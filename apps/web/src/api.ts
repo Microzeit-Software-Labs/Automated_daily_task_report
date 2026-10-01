@@ -23,6 +23,8 @@ export type WhatsAppStatus = S["WhatsAppStatusOut"];
 export type UiConfig = S["UiConfigOut"];
 export type Prompt = S["PromptOut"];
 export type LinkStatus = S["LinkStatusOut"];
+export type SheetSource = S["SheetSourceOut"];
+export type SheetCheck = S["SheetCheckOut"];
 
 /** A failed request, carrying the API's stable error `code` when there is one. */
 export class ApiError extends Error {
@@ -136,6 +138,10 @@ export const api = {
   startLink: () => request<LinkStatus>("POST", "/whatsapp/link"),
   cancelLink: () => request<LinkStatus>("DELETE", "/whatsapp/link"),
   reconnect: () => request<void>("POST", "/whatsapp/reconnect"),
+
+  sheet: () => request<SheetSource>("GET", "/sheet"),
+  checkSheet: (url: string) => request<SheetCheck>("POST", "/sheet/check", { url }),
+  saveSheet: (url: string) => request<SheetSource>("PUT", "/sheet", { url }),
 
   groups: () => request<Group[]>("GET", "/whatsapp/groups"),
   resolveGroup: (name: string) =>

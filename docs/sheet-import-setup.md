@@ -15,7 +15,37 @@ Interlock needs. Be aware that anyone holding the link can then read the sheet. 
 ever turn link sharing off, the import stops safely: it refuses to treat the sign-in page
 Google returns as an empty sheet, and it changes nothing.
 
-## 2. Check what it will do (writes nothing)
+## 2. Connect it from the browser
+
+Open **Settings → Google Sheet → Connect a sheet** (or **Change sheet** once one is
+connected), paste the link exactly as your browser shows it (the tab comes from `#gid=`;
+no `#gid=` means the first tab), and press **Check**. Checking reads the sheet and shows
+what it found, and **saves nothing**:
+
+- how many tasks it holds and the most recent few, so you know it's the right sheet;
+- if it can't be used, why and what to do: *not shared* (it says how to share it), *no such
+  sheet*, *can't reach Google*, *missing the columns Interlock needs* (it names them), or *no
+  tasks yet*.
+
+Then **Use this sheet**. The Interlock service reads it within about half a minute, and the
+dialog waits and tells you how many tasks were imported. Until the new sheet has been read
+successfully, the one you had keeps working: a failed attempt changes nothing.
+
+**Switching to a different sheet** hides the old sheet's tasks from reports (the dialog says
+how many first). They aren't deleted: tasks belong to the sheet they came from, so the
+same `Sr No.` in two sheets is two different tasks, and switching back restores the first
+sheet's tasks exactly as they were.
+
+**If the sheet stops being readable** (say link sharing is turned off), a banner appears on
+every page with a **Fix the sheet link** button, and Settings shows why and when it was last
+read. Reports keep using the tasks from the last good read.
+
+The link is stored in Interlock's database. `SHEET_IMPORT_URL` in `.env` is only used once, to
+fill it in the first time Interlock runs; after that the saved link wins, so changing it in
+the browser can't be undone by an old `.env`. (If the two-way sync, `SHEETS_PROVIDER=google`,
+is turned on, it owns the sheet and the link can't be changed here.)
+
+## 3. Optional: preview from the command line (writes nothing)
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\sheet_import_preview.py "<your sheet link>"
@@ -23,17 +53,6 @@ Google returns as an empty sheet, and it changes nothing.
 
 This prints how many rows it will mirror, their statuses, which rows are hidden as
 delegated, which rows it will skip and why, and the open tasks your report will list.
-
-## 3. Turn it on
-
-In `.env`, paste the link exactly as your browser shows it. The tab comes from `#gid=`:
-
-```dotenv
-SHEET_IMPORT_URL=https://docs.google.com/spreadsheets/d/<id>/edit#gid=0
-```
-
-Restart the worker. It imports on its first tick, then every
-`SHEET_SYNC_INTERVAL_SECONDS` (default 60).
 
 ## Your columns
 

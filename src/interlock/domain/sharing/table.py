@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 from interlock.domain.common.clock import ensure_aware
 from interlock.domain.sharing.render import STATUS_LABELS, select_report_tasks
+from interlock.domain.sync.sheet_source import sr_no_of_ref
 from interlock.domain.tasks.derivations import is_overdue
 from interlock.domain.tasks.entities import Task
 from interlock.domain.tasks.summary import TaskSummary
@@ -47,8 +48,7 @@ class ReportTable:
 
 def row_number(task: Task) -> str:
     """The sheet's own ``Sr No.`` for an imported task, else the display id."""
-    ref = task.external_row_ref or ""
-    return ref.removeprefix("sr:") if ref.startswith("sr:") else task.display_id
+    return sr_no_of_ref(task.external_row_ref) or task.display_id
 
 
 def _deadline_cell(task: Task, today: dt.date) -> str:

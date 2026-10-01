@@ -25,10 +25,12 @@ from interlock.domain.sharing.group import WhatsAppGroup
 from interlock.domain.sharing.job import ShareJob, ShareRecipient
 from interlock.domain.sharing.summary import DeliverySummary
 from interlock.domain.sync.reconciliation import ConflictResolution, SyncConflict
+from interlock.domain.sync.sheet_source import SheetSourceState
 from interlock.domain.tasks.entities import Priority, Task, TaskSourceKind, TaskStatus
 from interlock.domain.tasks.summary import ChangeSummary, TaskSummary
 from interlock.services.review_service import ReviewDetail
 from interlock.services.sharing_service import CommitMode, CommitResult
+from interlock.services.sheet_source_service import SheetCheck
 
 
 class TaskCreateRequest(BaseModel):
@@ -395,6 +397,84 @@ class UiConfigOut(BaseModel):
     allow_custom_send_time: bool
     sheet_url: str | None
     user_name: str
+
+
+class SheetCheckRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(min_length=1, max_length=2000)
+
+
+class SheetProblemOut(BaseModel):
+    code: str
+    """Stable: NOT_A_SHEET_LINK, NOT_SHARED, NOT_FOUND, UNREACHABLE, WRONG_COLUMNS, EMPTY,
+    TWO_WAY_SYNC or UNEXPECTED."""
+    message: str
+
+
+class SheetCheckOut(BaseModel):
+    """What reading a pasted link found. Nothing was saved."""
+
+    ok: bool
+    problem: SheetProblemOut | None = None
+    tab: str | None = None
+    """The tab that will be read (its ``gid``); a link without one reads the first tab."""
+    task_count: int = 0
+    sample_titles: list[str] = []
+    skipped: int = 0
+    """Rows left out (no Sr No., no task, or a duplicate Sr No.)."""
+    will_hide: int = 0
+    """Tasks from the sheet in use that switching would hide from reports."""
+    same_sheet: bool = False
+
+    @classmethod
+    def from_check(cls, check: SheetCheck) -> SheetCheckOut:
+        return cls(
+            ok=check.ok,
+            problem=(
+                None
+                if check.problem is None
+                else SheetProblemOut(code=check.problem.code, message=check.problem.message)
+            ),
+            tab=check.link.gid if check.link else None,
+            task_count=check.task_count,
+            sample_titles=list(check.sample_titles),
+            skipped=check.skipped,
+            will_hide=check.will_hide,
+            same_sheet=check.same_sheet,
+        )
+
+
+class SheetSourceOut(BaseModel):
+    """Which sheet the tasks come from, and how the last read of it went."""
+
+    configured: bool
+    url: str | None = None
+    changeable: bool = True
+    """False while the two-way Google Sheets sync owns the sheet."""
+    importing: bool = False
+    """A new link was saved and the worker has not read it yet."""
+    last_attempt_at: dt.datetime | None = None
+    last_success_at: dt.datetime | None = None
+    last_task_count: int | None = None
+    last_error_code: str | None = None
+    last_error: str | None = None
+
+    @classmethod
+    def from_state(cls, state: SheetSourceState | None, *, changeable: bool) -> SheetSourceOut:
+        if state is None or not state.configured:
+            return cls(configured=False, changeable=changeable)
+        return cls(
+            configured=True,
+            url=state.url,
+            changeable=changeable,
+            importing=state.import_pending,
+            last_attempt_at=state.last_attempt_at,
+            last_success_at=state.last_success_at,
+            last_task_count=state.last_task_count,
+            last_error_code=state.last_error_code,
+            last_error=state.last_error,
+        )
 
 
 class WhatsAppGroupCreateRequest(BaseModel):

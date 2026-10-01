@@ -3,6 +3,8 @@ import { useState } from "react";
 
 import { api } from "./api";
 import { PromptHost } from "./components/PromptHost";
+import { SheetBanner } from "./components/SheetBanner";
+import { SheetLinkModal } from "./components/SheetLinkModal";
 import { ToastProvider } from "./components/Toast";
 import { WhatsAppBanner } from "./components/WhatsAppBanner";
 import { WhatsAppLinkModal } from "./components/WhatsAppLinkModal";
@@ -27,7 +29,10 @@ function Shell() {
   const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: Infinity });
   // One shared status query: the pill, the banner and Settings all read it.
   const status = useQuery({ queryKey: ["status"], queryFn: api.status, refetchInterval: 15_000 });
+  // The saved Google Sheet and how its last read went: the banner and Settings share it.
+  const sheet = useQuery({ queryKey: ["sheet"], queryFn: api.sheet, refetchInterval: 30_000 });
   const [linking, setLinking] = useState(false);
+  const [changingSheet, setChangingSheet] = useState(false);
 
   return (
     <div className="shell">
@@ -52,6 +57,9 @@ function Shell() {
         {config.data && <WhatsAppPill config={config.data} status={status.data} failed={status.isError} />}
       </header>
       <WhatsAppBanner status={status.data} onLink={() => setLinking(true)} />
+      {config.data && (
+        <SheetBanner sheet={sheet.data} tz={config.data.timezone} onFix={() => setChangingSheet(true)} />
+      )}
       <main className="main">
         {config.error ? (
           <ErrorNote error={config.error} />
@@ -64,13 +72,20 @@ function Shell() {
             <Groups />
           </div>
         ) : route.name === "settings" ? (
-          <Settings config={config.data} status={status.data} onLink={() => setLinking(true)} />
+          <Settings
+            config={config.data}
+            status={status.data}
+            sheet={sheet.data}
+            onLink={() => setLinking(true)}
+            onChangeSheet={() => setChangingSheet(true)}
+          />
         ) : (
           <Dashboard config={config.data} />
         )}
       </main>
       {config.data && <PromptHost config={config.data} />}
       {linking && <WhatsAppLinkModal status={status.data} onClose={() => setLinking(false)} />}
+      {changingSheet && <SheetLinkModal sheet={sheet.data} onClose={() => setChangingSheet(false)} />}
     </div>
   );
 }

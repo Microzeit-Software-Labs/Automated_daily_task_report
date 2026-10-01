@@ -2,7 +2,14 @@
 // Times are always shown in the configured timezone (Settings.timezone), not
 // whatever the browser happens to think, so the UI agrees with the report.
 
-import type { ApprovalRequest, DeliverySummary, Group, Share, UiConfig } from "./api";
+import type {
+  ApprovalRequest,
+  DeliverySummary,
+  Group,
+  Share,
+  SheetSource,
+  UiConfig,
+} from "./api";
 import type { Route } from "./router";
 
 /** "YYYY-MM-DD" for `at` as seen in `tz`. */
@@ -541,4 +548,106 @@ export function reportBanner(
     message = "It will be sent at that time. The report was frozen when you approved it.";
   }
   return { tone: result.tone, title: result.label, message };
+}
+
+// -- Google Sheet --------------------------------------------------------------
+
+/** A quick look before asking the server: is this plausibly a Google Sheets
+ * link? (The server is the judge; this only keeps the Check button honest.) */
+export function looksLikeSheetLink(text: string): boolean {
+  return /\/spreadsheets\/d\/[A-Za-z0-9_-]+/.test(text.trim());
+}
+
+export interface SheetStatus {
+  tone: ResultTone;
+  title: string;
+  /** The reason, when something is wrong. */
+  detail?: string;
+}
+
+/** The one line (or two) the Settings card shows about the sheet. */
+export function sheetStatus(
+  sheet: SheetSource | undefined,
+  tz: string,
+  now: Date = new Date(),
+): SheetStatus {
+  if (!sheet) return { tone: "neutral", title: "Checking…" };
+  if (!sheet.configured) return { tone: "neutral", title: "No sheet is connected." };
+  if (sheet.importing) return { tone: "info", title: "Reading the sheet…" };
+  if (sheet.last_error) {
+    const at = whenLabel(sheet.last_attempt_at, tz, now);
+    const earlier = sheet.last_success_at
+      ? ` Reports are using the tasks read at ${whenLabel(sheet.last_success_at, tz, now)}.`
+      : " No tasks have been read from it yet.";
+    return {
+      tone: sheet.last_error_code === "UNREACHABLE" ? "warn" : "stop",
+      title: `Couldn't read the sheet at ${at}`,
+      detail: `${sheet.last_error}${earlier}`,
+    };
+  }
+  if (sheet.last_success_at) {
+    const count = sheet.last_task_count ?? 0;
+    return {
+      tone: "go",
+      title: `Last read ${whenLabel(sheet.last_success_at, tz, now)} · ${plural(count, "task")}`,
+    };
+  }
+  return { tone: "neutral", title: "Waiting for the first read…" };
+}
+
+export interface SheetBannerInfo {
+  tone: "stop" | "warn";
+  title: string;
+  message: string;
+  /** "fix" opens the change-sheet dialog; null means there is nothing to fix. */
+  action: "fix" | null;
+  actionLabel: string;
+}
+
+/** A page-wide notice when the sheet can't be read, or null when all is well.
+ * Silent while a new link is still being read, and while the sheet is fine. */
+export function sheetBanner(
+  sheet: SheetSource | undefined,
+  tz: string,
+  now: Date = new Date(),
+): SheetBannerInfo | null {
+  if (!sheet || !sheet.configured || sheet.importing || !sheet.last_error) return null;
+  const earlier = sheet.last_success_at
+    ? `Reports are using the tasks read at ${whenLabel(sheet.last_success_at, tz, now)}.`
+    : "No tasks have been read from it yet.";
+  if (sheet.last_error_code === "UNREACHABLE") {
+    return {
+      tone: "warn",
+      title: "Can't reach Google Sheets right now",
+      message: `${sheet.last_error} ${earlier}`,
+      action: null,
+      actionLabel: "",
+    };
+  }
+  return {
+    tone: sheet.last_success_at ? "warn" : "stop",
+    title: "Your Google Sheet can't be read",
+    message: `${sheet.last_error} ${earlier}`,
+    action: sheet.changeable ? "fix" : null,
+    actionLabel: "Fix the sheet link",
+  };
+}
+
+/** How far a just-saved sheet has got. `startedAtMs` is when the save returned,
+ * `nowMs` the current time; both are plain numbers so this stays pure. */
+export type SheetProgress = "importing" | "done" | "failed" | "slow";
+
+export const SHEET_IMPORT_PATIENCE_MS = 90_000;
+
+export function sheetProgress(
+  sheet: SheetSource | undefined,
+  startedAtMs: number,
+  nowMs: number,
+): SheetProgress {
+  if (sheet && !sheet.importing) {
+    // The worker has acted on it: it either read the sheet or wrote down why not.
+    if (sheet.last_error) return "failed";
+    if (sheet.last_success_at) return "done";
+  }
+  return nowMs - startedAtMs > SHEET_IMPORT_PATIENCE_MS ? "slow" : "importing";
 }
