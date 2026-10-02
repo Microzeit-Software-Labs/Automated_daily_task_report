@@ -30,6 +30,10 @@ _GID = re.compile(r"[#?&]gid=(\d+)")
 
 MAX_LINK_LENGTH = 2000
 
+REMOVED_TAG = "removed:sheet"
+"""Marks a task hidden because its row is no longer in the sheet being read.
+If the row comes back, the same task comes back with it."""
+
 RETIRED_TAG = "retired:sheet"
 """Marks a task hidden because its sheet is no longer the one in use. Distinct
 from the delegation tag, so switching back restores exactly these tasks and

@@ -261,6 +261,7 @@ def run_sheet_import(
                 hidden=result.hidden,
                 unhidden=result.unhidden,
                 retired=result.retired,
+                removed=result.removed,
                 unrecognised_status=list(result.unrecognised_status),
             )
         if result.skipped:

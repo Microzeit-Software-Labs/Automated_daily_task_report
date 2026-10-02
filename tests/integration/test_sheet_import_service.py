@@ -132,14 +132,6 @@ class TestLaterTicks:
         assert task.completed_at == T1
         assert summarize([task], today=dt.date(2026, 9, 29), tz=TZ).completed_today == 1
 
-    def test_a_row_that_vanishes_leaves_its_task_untouched(self, db_session: Session) -> None:
-        tick(db_session, "1,29-04-2026,Keep,Closed,,\n2,09-28-2026,Also keep,Inprogress,,\n")
-        tick(db_session, "1,29-04-2026,Keep,Closed,,\n", now=T1)
-
-        task = imported(db_session)["sr:2"]
-        assert not task.is_deleted
-        assert task.version == 1
-
     def test_tasks_created_in_the_app_are_never_touched(self, db_session: Session) -> None:
         repo = PostgresTaskRepository(db_session)
         own = repo.add(make_task(title="Made in Interlock"))
@@ -150,6 +142,91 @@ class TestLaterTicks:
         assert still is not None
         assert still.version == 1
         assert still.source is TaskSourceKind.APP
+
+
+class TestRowsRemovedFromTheSheet:
+    """The sheet is the only place tasks are edited, so a row deleted or
+    renumbered there must stop being reported. It used to be left behind, still
+    "In Progress" (a duplicate Hikvision task in a real report)."""
+
+    def test_a_deleted_row_hides_its_task_and_says_why(self, db_session: Session) -> None:
+        tick(db_session, "1,29-04-2026,Keep,Closed,,\n2,09-28-2026,Gone,Inprogress,,\n")
+        result = tick(db_session, "1,29-04-2026,Keep,Closed,,\n", now=T1)
+
+        assert result.removed == 1
+        assert result.changed_anything
+        gone = imported(db_session)["sr:2"]
+        assert gone.is_deleted
+        assert "removed:sheet" in gone.tags
+        assert gone.version == 2
+        assert audit_actions(db_session, gone.id)[-1] == ("TASK_UPDATED", "SYNC")
+        assert [t.title for t in PostgresTaskRepository(db_session).list()] == ["Keep"]
+
+    def test_the_duplicate_hikvision_case(self, db_session: Session) -> None:
+        """Sr 98 closed, Sr 100 the same title still open; the user then deleted
+        row 100. Only the closed one may be reported."""
+        both = (
+            "98,10-01-2026,Hikvision Camera to be fine tuned,Closed,Fine tuned it a little,\n"
+            "100,10-01-2026,Hikvision Camera to be fine tuned,Inprogress,,\n"
+        )
+        tick(db_session, both)
+        tick(
+            db_session,
+            "98,10-01-2026,Hikvision Camera to be fine tuned,Closed,Fine tuned it a little,\n",
+            now=T1,
+        )
+
+        visible = PostgresTaskRepository(db_session).list()
+        assert [(t.external_row_ref, t.status) for t in visible] == [
+            ("sr:98", TaskStatus.COMPLETED)
+        ]
+
+    def test_the_task_returns_when_its_row_does(self, db_session: Session) -> None:
+        first = "1,29-04-2026,Keep,Closed,,\n2,09-28-2026,Back again,Inprogress,,\n"
+        tick(db_session, first)
+        original_id = imported(db_session)["sr:2"].id
+        tick(db_session, "1,29-04-2026,Keep,Closed,,\n", now=T1)
+
+        result = tick(db_session, first, now=T1 + dt.timedelta(minutes=1))
+
+        assert result.unhidden == 1
+        back = imported(db_session)["sr:2"]
+        assert back.id == original_id
+        assert not back.is_deleted
+        assert "removed:sheet" not in back.tags
+
+    def test_a_row_that_is_only_skipped_keeps_its_task(self, db_session: Session) -> None:
+        """Two rows now share Sr No. 97, so both are skipped this tick. The row
+        is still in the sheet, so its task must not be taken as removed."""
+        tick(db_session, "97,09-28-2026,Kept,Inprogress,,\n98,09-28-2026,Other,Inprogress,,\n")
+        result = tick(
+            db_session,
+            "97,09-28-2026,Kept,Inprogress,,\n97,09-28-2026,Typo twin,Inprogress,,\n"
+            "98,09-28-2026,Other,Inprogress,,\n",
+            now=T1,
+        )
+
+        assert result.removed == 0
+        assert not imported(db_session)["sr:97"].is_deleted
+
+    def test_a_read_that_yields_no_tasks_hides_nothing(self, db_session: Session) -> None:
+        tick(db_session, "1,29-04-2026,Keep,Closed,,\n")
+        result = tick(db_session, ",05-11-2026,No number so no task,Closed,,\n", now=T1)
+
+        assert result.rows_read == 0
+        assert result.removed == 0
+        assert not imported(db_session)["sr:1"].is_deleted
+
+    def test_a_task_already_hidden_for_delegation_is_left_exactly_as_it_is(
+        self, db_session: Session
+    ) -> None:
+        tick(db_session, "24,05-25-2026,Handed over,Subhan's Task,,\n1,29-04-2026,Keep,Closed,,\n")
+        before = imported(db_session)["sr:24"]
+        result = tick(db_session, "1,29-04-2026,Keep,Closed,,\n", now=T1)
+
+        assert result.removed == 0
+        after = imported(db_session)["sr:24"]
+        assert (after.version, after.tags) == (before.version, before.tags)
 
 
 class TestDelegatedRows:
@@ -331,7 +408,9 @@ class TestSwitchingSheets:
     def test_without_a_scope_nothing_is_retired(self, db_session: Session) -> None:
         tick(db_session, "1,29-04-2026,Alpha,Pending,,\n")
 
-        result = tick(db_session, "2,29-04-2026,Beta,Pending,,\n", now=T1)
+        result = tick(
+            db_session, "1,29-04-2026,Alpha,Pending,,\n2,29-04-2026,Beta,Pending,,\n", now=T1
+        )
 
         assert result.retired == 0
         assert not imported(db_session)["sr:1"].is_deleted

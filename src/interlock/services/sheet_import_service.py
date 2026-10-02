@@ -13,14 +13,23 @@ write reasoning ``sheet_sync_service.py`` documents.
 Rows marked as someone else's ("Subhan's Task") are left out of reports by
 hiding the task through the existing soft delete (``deleted_at``), which
 every summary, report and default task listing already skips; they reappear
-if the row's status changes back. A row that vanishes from the sheet is never
-treated as a deletion (Phase 0 risk R5) -- its task is simply left as it was.
+if the row's status changes back.
+
+A row that vanishes from the sheet hides its task too (tagged ``removed:sheet``),
+and the task returns if the row does. This mirror is one-way and the sheet is the
+only place tasks are edited, so a row deleted or renumbered there must stop being
+reported; leaving it behind showed a task as "In Progress" long after the user
+had deleted it. (The Phase 0 rule "a vanished row is never a deletion" is for the
+two-way sync, where the sheet is only a peer.) Nothing is hidden when the sheet
+yielded no tasks at all, and a task whose row is merely *skipped* (a duplicate or
+blank ``Sr No.``) is left alone, because that row is still in the sheet.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import re
 from collections.abc import Callable, Iterable
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -30,7 +39,7 @@ from interlock.domain.common.clock import combine_local, local_date
 from interlock.domain.common.ids import TASK_PREFIX, format_display_id, new_id
 from interlock.domain.ports.repositories import AuditSink, TaskFilter, TaskRepository
 from interlock.domain.sync.sheet_import import ImportedRow, SkippedRow, parse_sheet
-from interlock.domain.sync.sheet_source import RETIRED_TAG, scope_of_ref, scoped_ref
+from interlock.domain.sync.sheet_source import REMOVED_TAG, RETIRED_TAG, scope_of_ref, scoped_ref
 from interlock.domain.tasks.entities import (
     Priority,
     Task,
@@ -42,6 +51,8 @@ from interlock.domain.tasks.entities import (
 
 _ACTOR = sync_actor("sheet_import")
 _DELEGATED_TAG = "delegated:"
+_SKIPPED_SR_NO = re.compile(r"Sr No\. (.+)")
+"""How ``SkippedRow.detail`` names the row's number (see ``parse_sheet``)."""
 _MAX_TAG_LENGTH = 50
 
 
@@ -53,6 +64,8 @@ class ImportResult:
     unhidden: int = 0
     retired: int = 0
     """Tasks that came from a different sheet, hidden now that this one is in use."""
+    removed: int = 0
+    """Tasks hidden because their row is no longer in the sheet."""
     unchanged: int = 0
     rows_read: int = 0
     """Tasks the sheet holds (rows with a usable ``Sr No.`` and title)."""
@@ -62,7 +75,14 @@ class ImportResult:
 
     @property
     def changed_anything(self) -> bool:
-        return bool(self.created or self.updated or self.hidden or self.unhidden or self.retired)
+        return bool(
+            self.created
+            or self.updated
+            or self.hidden
+            or self.unhidden
+            or self.retired
+            or self.removed
+        )
 
 
 class SheetImportService:
@@ -99,10 +119,12 @@ class SheetImportService:
         counts = {"created": 0, "updated": 0, "hidden": 0, "unhidden": 0, "unchanged": 0}
         unrecognised: list[str] = []
 
+        seen_refs: set[str] = set()
         for row in parsed.rows:
             if row.status is None:
                 unrecognised.append(row.sr_no)
             ref = scoped_ref(self._scope, row.external_ref)
+            seen_refs.add(ref)
             task = existing.get(ref)
             if task is None:
                 self._create(row, ref=ref, now=now)
@@ -114,6 +136,9 @@ class SheetImportService:
         return ImportResult(
             **counts,
             retired=self._retire_other_sheets(existing.values(), now=now),
+            removed=self._hide_removed_rows(
+                existing.values(), seen_refs=seen_refs, skipped=parsed.skipped, now=now
+            ),
             rows_read=len(parsed.rows),
             skipped=parsed.skipped,
             unrecognised_status=tuple(unrecognised),
@@ -142,27 +167,64 @@ class SheetImportService:
         for task in tasks:
             if task.is_deleted or scope_of_ref(task.external_row_ref) == self._scope:
                 continue
-            updated = dataclasses.replace(
-                task,
-                deleted_at=now,
-                updated_at=now,
-                version=task.version + 1,
-                tags=(*task.tags, RETIRED_TAG),
-            )
-            saved = self._tasks.update(updated, expected_version=task.version)
-            changed = diff(task, saved)
-            self._audit.record(
-                action="TASK_UPDATED",
-                entity_type="task",
-                entity_id=saved.id,
-                actor=str(_ACTOR),
-                actor_kind=ActorKind.SYNC.value,
-                at=now,
-                before={field: change["before"] for field, change in changed.items()},
-                after={field: change["after"] for field, change in changed.items()},
-            )
+            self._hide(task, tag=RETIRED_TAG, now=now)
             retired += 1
         return retired
+
+    def _hide_removed_rows(
+        self,
+        tasks: Iterable[Task],
+        *,
+        seen_refs: set[str],
+        skipped: tuple[SkippedRow, ...],
+        now: dt.datetime,
+    ) -> int:
+        """Hide this sheet's visible tasks whose row is no longer in it. Hidden,
+        not deleted, and tagged ``removed:sheet``: the row coming back restores
+        the same task. Nothing happens when the sheet yielded no tasks (that is
+        a broken read, not a sheet emptied on purpose), and a task whose row is
+        only *skipped* this time (duplicate or blank ``Sr No.``) stays."""
+        if not seen_refs:
+            return 0
+        skipped_refs = {
+            scoped_ref(self._scope, f"sr:{match.group(1)}")
+            for skip in skipped
+            if (match := _SKIPPED_SR_NO.fullmatch(skip.detail)) is not None
+        }
+        removed = 0
+        for task in tasks:
+            ref = task.external_row_ref
+            if (
+                task.is_deleted
+                or scope_of_ref(ref) != self._scope
+                or ref in seen_refs
+                or ref in skipped_refs
+            ):
+                continue
+            self._hide(task, tag=REMOVED_TAG, now=now)
+            removed += 1
+        return removed
+
+    def _hide(self, task: Task, *, tag: str, now: dt.datetime) -> None:
+        updated = dataclasses.replace(
+            task,
+            deleted_at=now,
+            updated_at=now,
+            version=task.version + 1,
+            tags=(*task.tags, tag),
+        )
+        saved = self._tasks.update(updated, expected_version=task.version)
+        changed = diff(task, saved)
+        self._audit.record(
+            action="TASK_UPDATED",
+            entity_type="task",
+            entity_id=saved.id,
+            actor=str(_ACTOR),
+            actor_kind=ActorKind.SYNC.value,
+            at=now,
+            before={field: change["before"] for field, change in changed.items()},
+            after={field: change["after"] for field, change in changed.items()},
+        )
 
     def _create(self, row: ImportedRow, *, ref: str, now: dt.datetime) -> None:
         logged_at = self._logged_at(row, now=now)
@@ -250,7 +312,9 @@ def _tags_for(row: ImportedRow, *, current: tuple[str, ...]) -> tuple[str, ...]:
     """Keep any tag the sheet does not own; replace only the delegation tag, and
     drop the retired marker (a row being read again means its sheet is back)."""
     kept = tuple(
-        tag for tag in current if not tag.startswith(_DELEGATED_TAG) and tag != RETIRED_TAG
+        tag
+        for tag in current
+        if not tag.startswith(_DELEGATED_TAG) and tag not in (RETIRED_TAG, REMOVED_TAG)
     )
     if row.delegated_to is None:
         return kept
